@@ -1,0 +1,55 @@
+:root {
+  --yellow: #f5c400;
+
+  /* DARK MODE */
+  --background: #050505;
+  --surface: #0b0b0b;
+  --surface-2: #111111;
+  --border: #1d1d1d;
+
+  --text: #ffffff;
+  --muted: #8a8a8a;
+}
+
+:root[data-theme="light"] {
+  /* LIGHT MODE */
+  --background: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f7f7f7;
+  --border: #e8e8e8;
+
+  --text: #111111;
+  --muted: #666666;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+
+  transition:
+    background 0.25s ease,
+    color 0.25s ease;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: var(--yellow);
+  color: #050505;
+}
