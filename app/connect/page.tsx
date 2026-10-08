@@ -9,13 +9,16 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAccount } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+
 import {
+  browserLocalPersistence,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
-  signOut,
 } from "firebase/auth";
+
 import {
   firebaseAuth,
   googleProvider,
@@ -48,9 +51,18 @@ export default function ConnectPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let active = true;
+
     const unsubscribe = onAuthStateChanged(
       firebaseAuth,
       (user) => {
+        if (!active) return;
+
+        console.log(
+          "Agora Firebase auth state:",
+          user?.email ?? "signed out",
+        );
+
         setFirebaseLoading(false);
 
         if (user) {
@@ -59,7 +71,10 @@ export default function ConnectPage() {
       },
     );
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [router]);
 
   useEffect(() => {
@@ -82,14 +97,31 @@ export default function ConnectPage() {
       setError("");
       setAuthLoading(true);
 
-      await signInWithPopup(
+      await setPersistence(
+        firebaseAuth,
+        browserLocalPersistence,
+      );
+
+      console.log(
+        "Agora Firebase persistence ready.",
+      );
+
+      const result = await signInWithPopup(
         firebaseAuth,
         googleProvider,
       );
 
+      console.log(
+        "Agora Google popup user:",
+        result.user.email,
+      );
+
       router.replace("/");
     } catch (err: unknown) {
-      console.error(err);
+      console.error(
+        "Google popup sign-in error:",
+        err,
+      );
 
       const message =
         err instanceof Error
@@ -231,7 +263,7 @@ export default function ConnectPage() {
           </div>
 
           {error && (
-            <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            <div className="mb-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300 break-words">
               {error}
             </div>
           )}
@@ -321,9 +353,11 @@ export default function ConnectPage() {
 
             <div className="my-5 flex items-center gap-3">
               <div className="h-px flex-1 bg-white/10" />
+
               <span className="text-xs text-white/30">
                 OR
               </span>
+
               <div className="h-px flex-1 bg-white/10" />
             </div>
 
