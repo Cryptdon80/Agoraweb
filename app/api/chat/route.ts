@@ -1,9 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
 
 type ImagePart = {
   inlineData: {
@@ -24,6 +19,93 @@ type WalletPriceData = {
   pol: number;
   bnb: number;
 };
+
+async function generateGeminiContent(
+  contents: string | Array<string | ImagePart>
+) {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "GEMINI_API_KEY is not configured."
+    );
+  }
+
+  const response = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts:
+              typeof contents === "string"
+                ? [
+                    {
+                      text: contents,
+                    },
+                  ]
+                : contents.map((item) => {
+                    if (typeof item === "string") {
+                      return {
+                        text: item,
+                      };
+                    }
+
+                    return {
+                      inline_data: {
+                        mime_type:
+                          item.inlineData.mimeType,
+                        data: item.inlineData.data,
+                      },
+                    };
+                  }),
+          },
+        ],
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error(
+      "Gemini REST error:",
+      response.status,
+      data
+    );
+
+    throw new Error(
+      typeof data?.error?.message === "string"
+        ? data.error.message
+        : "Gemini request failed."
+    );
+  }
+
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.filter(
+        (part: { text?: unknown }) =>
+          typeof part?.text === "string"
+      )
+      ?.map(
+        (part: { text: string }) => part.text
+      )
+      ?.join("") || "";
+
+  if (!text) {
+    throw new Error(
+      "Gemini returned an empty response."
+    );
+  }
+
+  return text;
+}
 
 async function getLivePrices(): Promise<WalletPriceData | null> {
   try {
@@ -74,7 +156,11 @@ async function getLivePrices(): Promise<WalletPriceData | null> {
       bnb: prices.BNBUSDT,
     };
   } catch (error) {
-    console.error("Agora price fetch error:", error);
+    console.error(
+      "Agora price fetch error:",
+      error
+    );
+
     return null;
   }
 }
@@ -87,7 +173,10 @@ function getNumericBalance(
     (item) => item.chainId === chainId
   );
 
-  if (!network || typeof network.balance !== "string") {
+  if (
+    !network ||
+    typeof network.balance !== "string"
+  ) {
     return 0;
   }
 
@@ -117,10 +206,17 @@ export async function POST(request: Request) {
         ? body.imageMimeType
         : "";
 
-    if (!message || typeof message !== "string") {
+    if (
+      !message ||
+      typeof message !== "string"
+    ) {
       return NextResponse.json(
-        { error: "Message is required." },
-        { status: 400 }
+        {
+          error: "Message is required.",
+        },
+        {
+          status: 400,
+        }
       );
     }
 
@@ -131,13 +227,17 @@ export async function POST(request: Request) {
         "image/webp",
       ];
 
-      if (!allowedTypes.includes(imageMimeType)) {
+      if (
+        !allowedTypes.includes(imageMimeType)
+      ) {
         return NextResponse.json(
           {
             error:
               "Unsupported image type. Please use PNG, JPG, or WEBP.",
           },
-          { status: 400 }
+          {
+            status: 400,
+          }
         );
       }
     }
@@ -154,7 +254,9 @@ export async function POST(request: Request) {
               ? "Agora"
               : "User";
 
-          return `${role}: ${item.text || ""}`;
+          return `${role}: ${
+            item.text || ""
+          }`;
         }
       )
       .join("\n\n");
@@ -176,7 +278,10 @@ IMPORTANT CONVERSATION RULES:
 - Do not make every answer a numbered list. Vary the formatting naturally.
 
 PREVIOUS CONVERSATION:
-${conversationHistory || "No previous conversation."}
+${
+  conversationHistory ||
+  "No previous conversation."
+}
 
 CURRENT USER MESSAGE:
 ${message}
@@ -200,9 +305,12 @@ If something is unclear or unreadable, say so.
           ? wallet.balances
           : [];
 
-      const getBalance = (chainId: number) => {
+      const getBalance = (
+        chainId: number
+      ) => {
         const network = balances.find(
-          (item) => item.chainId === chainId
+          (item) =>
+            item.chainId === chainId
         );
 
         if (!network) {
@@ -210,12 +318,14 @@ If something is unclear or unreadable, say so.
         }
 
         const balance =
-          typeof network.balance === "string"
+          typeof network.balance ===
+          "string"
             ? network.balance
             : "Unavailable";
 
         const symbol =
-          typeof network.symbol === "string"
+          typeof network.symbol ===
+          "string"
             ? network.symbol
             : "";
 
@@ -224,12 +334,8 @@ If something is unclear or unreadable, say so.
           : balance;
       };
 
-      /*
-       * Get live market prices for ETH, POL and BNB.
-       * These are used only to calculate an estimated
-       * portfolio value in USDT.
-       */
-      const prices = await getLivePrices();
+      const prices =
+        await getLivePrices();
 
       let usdtValues: {
         ethereum: number;
@@ -243,28 +349,40 @@ If something is unclear or unreadable, say so.
 
       if (prices) {
         const ethereum =
-          getNumericBalance(balances, 1) *
-          prices.eth;
+          getNumericBalance(
+            balances,
+            1
+          ) * prices.eth;
 
         const base =
-          getNumericBalance(balances, 8453) *
-          prices.eth;
+          getNumericBalance(
+            balances,
+            8453
+          ) * prices.eth;
 
         const polygon =
-          getNumericBalance(balances, 137) *
-          prices.pol;
+          getNumericBalance(
+            balances,
+            137
+          ) * prices.pol;
 
         const arbitrum =
-          getNumericBalance(balances, 42161) *
-          prices.eth;
+          getNumericBalance(
+            balances,
+            42161
+          ) * prices.eth;
 
         const optimism =
-          getNumericBalance(balances, 10) *
-          prices.eth;
+          getNumericBalance(
+            balances,
+            10
+          ) * prices.eth;
 
         const bnb =
-          getNumericBalance(balances, 56) *
-          prices.bnb;
+          getNumericBalance(
+            balances,
+            56
+          ) * prices.bnb;
 
         usdtValues = {
           ethereum,
@@ -283,7 +401,9 @@ If something is unclear or unreadable, say so.
         };
       }
 
-      const formatUsdt = (value: number) => {
+      const formatUsdt = (
+        value: number
+      ) => {
         return value.toFixed(6);
       };
 
@@ -337,25 +457,39 @@ ${prices.bnb} USDT
 ESTIMATED USDT VALUES:
 
 Ethereum ETH:
-${formatUsdt(usdtValues.ethereum)} USDT
+${formatUsdt(
+  usdtValues.ethereum
+)} USDT
 
 Base ETH:
-${formatUsdt(usdtValues.base)} USDT
+${formatUsdt(
+  usdtValues.base
+)} USDT
 
 Polygon POL:
-${formatUsdt(usdtValues.polygon)} USDT
+${formatUsdt(
+  usdtValues.polygon
+)} USDT
 
 Arbitrum ETH:
-${formatUsdt(usdtValues.arbitrum)} USDT
+${formatUsdt(
+  usdtValues.arbitrum
+)} USDT
 
 Optimism ETH:
-${formatUsdt(usdtValues.optimism)} USDT
+${formatUsdt(
+  usdtValues.optimism
+)} USDT
 
 BNB Chain BNB:
-${formatUsdt(usdtValues.bnb)} USDT
+${formatUsdt(
+  usdtValues.bnb
+)} USDT
 
 TOTAL ESTIMATED NATIVE-ASSET VALUE:
-${formatUsdt(usdtValues.total)} USDT
+${formatUsdt(
+  usdtValues.total
+)} USDT
 `;
       } else {
         prompt += `
@@ -365,7 +499,6 @@ Unavailable right now.
 
 Do not invent a USDT conversion if live prices are unavailable.
 `;
-
       }
 
       prompt += `
@@ -396,13 +529,16 @@ WALLET BALANCE RULES:
 `;
     }
 
-    const contents: string | Array<string | ImagePart> =
+    const contents:
+      | string
+      | Array<string | ImagePart> =
       imageData
         ? [
             prompt,
             {
               inlineData: {
-                mimeType: imageMimeType,
+                mimeType:
+                  imageMimeType,
                 data: imageData,
               },
             },
@@ -410,16 +546,18 @@ WALLET BALANCE RULES:
         : prompt;
 
     const response =
-      await ai.models.generateContent({
-        model: "gemini-3.5-flash-lite",
-        contents,
-      });
+      await generateGeminiContent(
+        contents
+      );
 
     return NextResponse.json({
-      response: response.text,
+      response,
     });
   } catch (error) {
-    console.error("Agora AI error:", error);
+    console.error(
+      "Agora AI error:",
+      error
+    );
 
     return NextResponse.json(
       {
@@ -428,7 +566,9 @@ WALLET BALANCE RULES:
             ? error.message
             : "Unknown error",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
