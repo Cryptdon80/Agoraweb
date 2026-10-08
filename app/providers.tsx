@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import "@rainbow-me/rainbowkit/styles.css";
 
@@ -27,7 +27,8 @@ import {
 
 const config = getDefaultConfig({
   appName: "Agora",
-  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID!,
+  projectId:
+    process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID!,
   chains: [
     mainnet,
     base,
@@ -37,6 +38,7 @@ const config = getDefaultConfig({
     bsc,
   ],
   ssr: true,
+  syncConnectedChain: true,
 });
 
 const queryClient = new QueryClient();
@@ -47,13 +49,16 @@ export function Providers({
   children: React.ReactNode;
 }) {
   return (
-    <WagmiProvider config={config}>
+    <WagmiProvider
+      config={config}
+      reconnectOnMount={false}
+    >
       <QueryClientProvider client={queryClient}>
         <ChatProvider>
-  <RainbowKitProvider>
-    {children}
-  </RainbowKitProvider>
-</ChatProvider>
+          <RainbowKitProvider>
+            {children}
+          </RainbowKitProvider>
+        </ChatProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );

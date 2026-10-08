@@ -1,4 +1,4 @@
-:root {
+@import "tailwindcss";:root {
   --yellow: #f5c400;
 
   /* DARK MODE */
@@ -53,3 +53,5 @@ textarea {
   background: var(--yellow);
   color: #050505;
 }
+
+

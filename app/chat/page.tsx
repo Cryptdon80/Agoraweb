@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { parseUnits } from "viem";
 import {
   useAccount,
@@ -19,6 +20,12 @@ import {
 import { parseAgentSwap } from "../lib/agent-swap";
 import { useChat } from "../lib/chat-context";
 import { saveChatHistory } from "../lib/chat-history";
+import {
+  onAuthStateChanged,
+  signOut,
+  type User,
+} from "firebase/auth";
+import { firebaseAuth } from "../lib/firebase";
 
 type Theme = "light" | "dark";
 
@@ -28,48 +35,104 @@ type PendingTransaction = {
   value: bigint;
 };
 
+type WalletAsset = {
+  chainId: number;
+  network: string;
+  symbol: string;
+  balance: string;
+  decimals: number;
+  priceUsd: number | null;
+  valueUsd: number | null;
+  type: "native" | "token";
+  address?: string;
+};
+
+const TOKEN_ADDRESSES = {
+  ethereum: {
+    usdt: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+  },
+  base: {
+    usdt: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+    usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  },
+  polygon: {
+    usdt: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+  },
+  arbitrum: {
+    usdt: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+    usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+  },
+  optimism: {
+    usdt: "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58",
+    usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+  },
+  bnb: {
+    usdt: "0x55d398326f99059fF775485246999027B3197955",
+    usdc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+  },
+} as const;
+
+function cleanNumber(value: string) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+
+  return number;
+}
+
+function formatAmount(value: string) {
+  const number = cleanNumber(value);
+
+  if (number === 0) {
+    return "0";
+  }
+
+  return number.toLocaleString(undefined, {
+    maximumFractionDigits: 8,
+  });
+}
+
+function formatUsd(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return "price unavailable";
+  }
+
+  if (value < 0.01 && value > 0) {
+    return `$${value.toFixed(4)}`;
+  }
+
+  return `$${value.toFixed(2)}`;
+}
+
 export default function ChatPage() {
   const [theme, setTheme] = useState<Theme>("light");
 
   const {
-  address,
-  isConnected,
-  isReconnecting,
-} = useAccount();
+    address,
+    isConnected,
+    isReconnecting,
+  } = useAccount();
 
-const { disconnect } = useDisconnect();
+  const { disconnect } = useDisconnect();
 
-const walletReconnecting = isReconnecting;
+  const walletReconnecting = isReconnecting;
 
   const chainId = useChainId();
   const { sendTransactionAsync } = useSendTransaction();
 
-  // Active network balance.
-  // This stays separate because the swap system needs the
-  // balance of the currently selected network.
-  const { data: walletBalance } = useBalance({
-    address,
-    chainId,
-    query: {
-      enabled: Boolean(
-        address &&
-          isConnected &&
-          !walletReconnecting
-      ),
-    },
-  });
-
-  /*
-   * Agora wallet intelligence:
-   * Read the same connected wallet address across every
-   * supported network instead of only the currently selected chain.
-   */
   const walletEnabled = Boolean(
     address &&
       isConnected &&
       !walletReconnecting
   );
 
+  /*
+   * Native balances across all supported networks.
+   */
   const {
     data: ethereumBalance,
     isLoading: ethereumLoading,
@@ -136,42 +199,376 @@ const walletReconnecting = isReconnecting;
     },
   });
 
-  const allWalletBalances = [
+  /*
+   * USDT balances.
+   */
+  const {
+    data: ethereumUsdtBalance,
+    isLoading: ethereumUsdtLoading,
+  } = useBalance({
+    address,
+    chainId: 1,
+    token:
+      TOKEN_ADDRESSES.ethereum.usdt as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: baseUsdtBalance,
+    isLoading: baseUsdtLoading,
+  } = useBalance({
+    address,
+    chainId: 8453,
+    token:
+      TOKEN_ADDRESSES.base.usdt as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: polygonUsdtBalance,
+    isLoading: polygonUsdtLoading,
+  } = useBalance({
+    address,
+    chainId: 137,
+    token:
+      TOKEN_ADDRESSES.polygon.usdt as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: arbitrumUsdtBalance,
+    isLoading: arbitrumUsdtLoading,
+  } = useBalance({
+    address,
+    chainId: 42161,
+    token:
+      TOKEN_ADDRESSES.arbitrum.usdt as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: optimismUsdtBalance,
+    isLoading: optimismUsdtLoading,
+  } = useBalance({
+    address,
+    chainId: 10,
+    token:
+      TOKEN_ADDRESSES.optimism.usdt as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: bnbUsdtBalance,
+    isLoading: bnbUsdtLoading,
+  } = useBalance({
+    address,
+    chainId: 56,
+    token:
+      TOKEN_ADDRESSES.bnb.usdt as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  /*
+   * USDC balances.
+   */
+  const {
+    data: ethereumUsdcBalance,
+    isLoading: ethereumUsdcLoading,
+  } = useBalance({
+    address,
+    chainId: 1,
+    token:
+      TOKEN_ADDRESSES.ethereum.usdc as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: baseUsdcBalance,
+    isLoading: baseUsdcLoading,
+  } = useBalance({
+    address,
+    chainId: 8453,
+    token:
+      TOKEN_ADDRESSES.base.usdc as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: polygonUsdcBalance,
+    isLoading: polygonUsdcLoading,
+  } = useBalance({
+    address,
+    chainId: 137,
+    token:
+      TOKEN_ADDRESSES.polygon.usdc as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: arbitrumUsdcBalance,
+    isLoading: arbitrumUsdcLoading,
+  } = useBalance({
+    address,
+    chainId: 42161,
+    token:
+      TOKEN_ADDRESSES.arbitrum.usdc as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: optimismUsdcBalance,
+    isLoading: optimismUsdcLoading,
+  } = useBalance({
+    address,
+    chainId: 10,
+    token:
+      TOKEN_ADDRESSES.optimism.usdc as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: bnbUsdcBalance,
+    isLoading: bnbUsdcLoading,
+  } = useBalance({
+    address,
+    chainId: 56,
+    token:
+      TOKEN_ADDRESSES.bnb.usdc as `0x${string}`,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  /*
+   * Active network native balance.
+   */
+  const { data: walletBalance } = useBalance({
+    address,
+    chainId,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  /*
+   * Every supported wallet asset that Agora knows how to read.
+   *
+   * Zero balances are kept internally so the swap balance checker
+   * can always answer accurately.
+   */
+  const allWalletAssets: WalletAsset[] = [
     {
       chainId: 1,
       network: "Ethereum",
       symbol: "ETH",
       balance: ethereumBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: null,
+      valueUsd: null,
+      type: "native",
+    },
+    {
+      chainId: 1,
+      network: "Ethereum",
+      symbol: "USDT",
+      balance: ethereumUsdtBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.ethereum.usdt,
+    },
+    {
+      chainId: 1,
+      network: "Ethereum",
+      symbol: "USDC",
+      balance: ethereumUsdcBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.ethereum.usdc,
     },
     {
       chainId: 8453,
       network: "Base",
       symbol: "ETH",
       balance: baseBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: null,
+      valueUsd: null,
+      type: "native",
+    },
+    {
+      chainId: 8453,
+      network: "Base",
+      symbol: "USDT",
+      balance: baseUsdtBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.ethereum.usdt,
+    },
+    {
+      chainId: 8453,
+      network: "Base",
+      symbol: "USDC",
+      balance: baseUsdcBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.base.usdt,
     },
     {
       chainId: 137,
       network: "Polygon",
       symbol: "POL",
       balance: polygonBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: null,
+      valueUsd: null,
+      type: "native",
+    },
+    {
+      chainId: 137,
+      network: "Polygon",
+      symbol: "USDT",
+      balance: polygonUsdtBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.base.usdc,
+    },
+    {
+      chainId: 137,
+      network: "Polygon",
+      symbol: "USDC",
+      balance: polygonUsdcBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.polygon.usdt,
     },
     {
       chainId: 42161,
       network: "Arbitrum",
       symbol: "ETH",
       balance: arbitrumBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: null,
+      valueUsd: null,
+      type: "native",
+    },
+    {
+      chainId: 42161,
+      network: "Arbitrum",
+      symbol: "USDT",
+      balance: arbitrumUsdtBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.polygon.usdc,
+    },
+    {
+      chainId: 42161,
+      network: "Arbitrum",
+      symbol: "USDC",
+      balance: arbitrumUsdcBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.arbitrum.usdt,
     },
     {
       chainId: 10,
       network: "Optimism",
       symbol: "ETH",
       balance: optimismBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: null,
+      valueUsd: null,
+      type: "native",
+    },
+    {
+      chainId: 10,
+      network: "Optimism",
+      symbol: "USDT",
+      balance: optimismUsdtBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.arbitrum.usdc,
+    },
+    {
+      chainId: 10,
+      network: "Optimism",
+      symbol: "USDC",
+      balance: optimismUsdcBalance?.formatted || "0",
+      decimals: 6,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.optimism.usdt,
     },
     {
       chainId: 56,
       network: "BNB Chain",
       symbol: "BNB",
       balance: bnbBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: null,
+      valueUsd: null,
+      type: "native",
+    },
+    {
+      chainId: 56,
+      network: "BNB Chain",
+      symbol: "USDT",
+      balance: bnbUsdtBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
+      address: TOKEN_ADDRESSES.optimism.usdc,
+    },
+    {
+      chainId: 56,
+      network: "BNB Chain",
+      symbol: "USDC",
+      balance: bnbUsdcBalance?.formatted || "0",
+      decimals: 18,
+      priceUsd: 1,
+      valueUsd: null,
+      type: "token",
     },
   ];
 
@@ -183,13 +580,39 @@ const walletReconnecting = isReconnecting;
       polygonLoading ||
       arbitrumLoading ||
       optimismLoading ||
-      bnbLoading
+      bnbLoading ||
+      ethereumUsdtLoading ||
+      baseUsdtLoading ||
+      polygonUsdtLoading ||
+      arbitrumUsdtLoading ||
+      optimismUsdtLoading ||
+      bnbUsdtLoading ||
+      ethereumUsdcLoading ||
+      baseUsdcLoading ||
+      polygonUsdcLoading ||
+      arbitrumUsdcLoading ||
+      optimismUsdcLoading ||
+      bnbUsdcLoading
     );
 
   const { messages, setMessages } = useChat();
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const router = useRouter();
+
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [googleUser, setGoogleUser] =
+    useState<User | null>(null);
+
+  const sessionLockedRef = useRef(false);
+
+  const AGORA_LAST_ACTIVITY_KEY =
+    "agora-last-activity";
+
+  const AGORA_SESSION_TIMEOUT =
+    60 * 60 * 1000;
 
   const [selectedImage, setSelectedImage] = useState<{
     preview: string;
@@ -301,6 +724,233 @@ const walletReconnecting = isReconnecting;
     setSelectedImage(null);
   }
 
+  function getSwapBalance(
+    swapChainId: number,
+    symbol: string,
+    tokenAddress?: string
+  ) {
+    const normalizedSymbol = symbol.toUpperCase();
+    const normalizedToken = tokenAddress?.toLowerCase();
+
+    const nativeAddress =
+      "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    const isNative =
+      normalizedToken === nativeAddress;
+
+    const asset = allWalletAssets.find((item) => {
+      if (
+        item.chainId !== swapChainId ||
+        item.symbol.toUpperCase() !== normalizedSymbol
+      ) {
+        return false;
+      }
+
+      if (item.type === "native") {
+        return isNative;
+      }
+
+      return (
+        Boolean(item.address) &&
+        Boolean(normalizedToken) &&
+        item.address!.toLowerCase() === normalizedToken
+      );
+    });
+
+    return asset || null;
+  }
+
+  async function getLivePrices() {
+    const prices: Record<string, number | null> = {
+      ETH: null,
+      BNB: null,
+      POL: null,
+    };
+
+    try {
+      const symbols = [
+        "ETHUSDT",
+        "BNBUSDT",
+        "POLUSDT",
+      ];
+
+      const results = await Promise.all(
+        symbols.map(async (symbol) => {
+          try {
+            const response = await fetch(
+              `https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`,
+              {
+                cache: "no-store",
+              }
+            );
+
+            if (!response.ok) {
+              return [symbol, null] as const;
+            }
+
+            const data = await response.json();
+
+            const value = Number(data.price);
+
+            if (!Number.isFinite(value)) {
+              return [symbol, null] as const;
+            }
+
+            return [symbol, value] as const;
+          } catch {
+            return [symbol, null] as const;
+          }
+        })
+      );
+
+      for (const [symbol, value] of results) {
+        if (symbol === "ETHUSDT") {
+          prices.ETH = value;
+        }
+
+        if (symbol === "BNBUSDT") {
+          prices.BNB = value;
+        }
+
+        if (symbol === "POLUSDT") {
+          prices.POL = value;
+        }
+      }
+    } catch {
+      // Keep unavailable prices as null.
+    }
+
+    return prices;
+  }
+
+  async function buildBalanceMessage() {
+    const prices = await getLivePrices();
+
+    const assetsWithValues = allWalletAssets.map(
+      (asset) => {
+        let priceUsd = asset.priceUsd;
+
+        if (asset.symbol === "ETH") {
+          priceUsd = prices.ETH;
+        }
+
+        if (asset.symbol === "BNB") {
+          priceUsd = prices.BNB;
+        }
+
+        if (asset.symbol === "POL") {
+          priceUsd = prices.POL;
+        }
+
+        const numericBalance = cleanNumber(
+          asset.balance
+        );
+
+        const valueUsd =
+          priceUsd !== null
+            ? numericBalance * priceUsd
+            : null;
+
+        return {
+          ...asset,
+          priceUsd,
+          valueUsd,
+        };
+      }
+    );
+
+    const nonZeroAssets =
+      assetsWithValues.filter(
+        (asset) =>
+          cleanNumber(asset.balance) > 0
+      );
+
+    if (nonZeroAssets.length === 0) {
+      return (
+        "💰 Wallet balance\n\n" +
+        "I couldn't find any non-zero supported token balances in this wallet."
+      );
+    }
+
+    const totalUsd = nonZeroAssets.reduce(
+      (total, asset) =>
+        total +
+        (asset.valueUsd ?? 0),
+      0
+    );
+
+    const unavailableCount =
+      nonZeroAssets.filter(
+        (asset) =>
+          asset.valueUsd === null
+      ).length;
+
+    const grouped = new Map<
+      string,
+      WalletAsset[]
+    >();
+
+    for (const asset of nonZeroAssets) {
+      const current =
+        grouped.get(asset.network) || [];
+
+      current.push(asset);
+
+      grouped.set(
+        asset.network,
+        current
+      );
+    }
+
+    const sections: string[] = [];
+
+    for (const [
+      network,
+      assets,
+    ] of grouped.entries()) {
+      const lines = assets.map(
+        (asset) => {
+          const amount =
+            formatAmount(asset.balance);
+
+          const value =
+            asset.valueUsd === null
+              ? "price unavailable"
+              : formatUsd(
+                  asset.valueUsd
+                );
+
+          return `• ${asset.symbol}: ${amount} — ${value}`;
+        }
+      );
+
+      sections.push(
+        `${network}\n${lines.join("\n")}`
+      );
+    }
+
+    let message =
+      "💰 Your Agora Wallet Balance\n\n" +
+      sections.join("\n\n") +
+      "\n\n────────────────\n" +
+      `Estimated total: ${formatUsd(totalUsd)} USDT`;
+
+    if (unavailableCount > 0) {
+      message +=
+        `\n\n⚠️ ${unavailableCount} asset${
+          unavailableCount === 1
+            ? ""
+            : "s"
+        } ${
+          unavailableCount === 1
+            ? "has"
+            : "have"
+        } no live price available, so the total is an estimate based only on assets with available prices.`;
+    }
+
+    return message;
+  }
+
   async function authorizeSwap() {
     if (!pendingTransaction) {
       return;
@@ -354,6 +1004,8 @@ const walletReconnecting = isReconnecting;
 
       setPendingTransaction(null);
     } catch (error) {
+      setPendingTransaction(null);
+
       setMessages((current) => [
         ...current,
         {
@@ -368,7 +1020,6 @@ const walletReconnecting = isReconnecting;
       setTransactionLoading(false);
     }
   }
-
   useEffect(() => {
     const saved = localStorage.getItem(
       "agora-theme"
@@ -383,6 +1034,166 @@ const walletReconnecting = isReconnecting;
       "data-theme",
       current
     );
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      firebaseAuth,
+      (user) => {
+        setGoogleUser(user);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  async function disconnectGoogle() {
+    try {
+      await signOut(firebaseAuth);
+    } catch (error) {
+      console.error(
+        "Google disconnect failed:",
+        error
+      );
+    }
+
+    setGoogleUser(null);
+    setAccountOpen(false);
+
+    if (!isConnected) {
+      router.replace("/connect");
+    }
+  }
+
+  function disconnectWallet() {
+    disconnect();
+    setAccountOpen(false);
+
+    if (!firebaseAuth.currentUser) {
+      router.replace("/connect");
+    }
+  }
+
+  async function lockAgora() {
+    if (sessionLockedRef.current) {
+      return;
+    }
+
+    sessionLockedRef.current = true;
+
+    localStorage.removeItem(
+      AGORA_LAST_ACTIVITY_KEY
+    );
+
+    setAccountOpen(false);
+
+    try {
+      await signOut(firebaseAuth);
+    } catch (error) {
+      console.error(
+        "Agora lock sign-out failed:",
+        error
+      );
+    }
+
+    disconnect();
+
+    router.replace("/connect");
+  }
+
+  useEffect(() => {
+    const checkSession = () => {
+      const lastActivity = Number(
+        localStorage.getItem(
+          AGORA_LAST_ACTIVITY_KEY
+        ) || "0"
+      );
+
+      if (
+        lastActivity &&
+        Date.now() - lastActivity >=
+          AGORA_SESSION_TIMEOUT
+      ) {
+        void lockAgora();
+        return;
+      }
+
+      if (!lastActivity) {
+        localStorage.setItem(
+          AGORA_LAST_ACTIVITY_KEY,
+          String(Date.now())
+        );
+      }
+    };
+
+    checkSession();
+
+    const activityEvents = [
+      "pointerdown",
+      "keydown",
+      "touchstart",
+      "scroll",
+    ];
+
+    let lastWrite = 0;
+
+    const recordActivity = () => {
+      const now = Date.now();
+
+      if (now - lastWrite < 30000) {
+        return;
+      }
+
+      lastWrite = now;
+
+      localStorage.setItem(
+        AGORA_LAST_ACTIVITY_KEY,
+        String(now)
+      );
+    };
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(
+        eventName,
+        recordActivity,
+        { passive: true }
+      );
+    });
+
+    const interval = window.setInterval(
+      checkSession,
+      30000
+    );
+
+    const handleVisibility = () => {
+      if (
+        document.visibilityState ===
+        "visible"
+      ) {
+        checkSession();
+      }
+    };
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibility
+    );
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(
+          eventName,
+          recordActivity
+        );
+      });
+
+      window.clearInterval(interval);
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibility
+      );
+    };
   }, []);
 
   function toggleTheme() {
@@ -418,13 +1229,11 @@ const walletReconnecting = isReconnecting;
         text
       );
 
-    /*
-     * Wagmi may still be restoring the persisted wallet
-     * immediately after a page refresh.
-     *
-     * Do not tell the user that their wallet is disconnected
-     * while that reconnection is still happening.
-     */
+    const balanceRequest =
+      /\b(balance|balances|wallet balance|how much.*(have|hold|own)|what.*(have|hold|own))\b/i.test(
+        text
+      );
+
     if (walletQuestion && walletReconnecting) {
       setMessages((current) => [
         ...current,
@@ -445,10 +1254,6 @@ const walletReconnecting = isReconnecting;
       return;
     }
 
-    /*
-     * Only show the disconnected message when Wagmi has
-     * finished reconnecting and there is genuinely no wallet.
-     */
     if (
       walletQuestion &&
       !isConnected &&
@@ -474,11 +1279,6 @@ const walletReconnecting = isReconnecting;
       return;
     }
 
-    /*
-     * For wallet questions, wait until ALL supported networks
-     * have finished loading. This prevents Agora from answering
-     * with only whichever network happens to load first.
-     */
     if (
       walletQuestion &&
       isConnected &&
@@ -503,27 +1303,44 @@ const walletReconnecting = isReconnecting;
       return;
     }
 
-    if (
-      walletQuestion &&
-      isConnected &&
-      !walletBalance &&
-      !allWalletBalancesLoading
-    ) {
+    if (balanceRequest && isConnected) {
       setMessages((current) => [
         ...current,
         {
           role: "user",
           text,
         },
-        {
-          role: "assistant",
-          text:
-            "Your wallet is connected, but I couldn't read the wallet data yet. Please wait a moment and try again.",
-        },
       ]);
 
       setInput("");
       setSelectedImage(null);
+      setLoading(true);
+
+      try {
+        const balanceMessage =
+          await buildBalanceMessage();
+
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            text: balanceMessage,
+          },
+        ]);
+      } catch (error) {
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            text:
+              error instanceof Error
+                ? error.message
+                : "I couldn't read your wallet balances right now.",
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
 
       return;
     }
@@ -546,9 +1363,101 @@ const walletReconnecting = isReconnecting;
     setLoading(true);
 
     try {
-      const swap = imageToSend
-        ? null
-        : parseAgentSwap(text);
+      let swap =
+        imageToSend ||
+        !/^swap\s+/i.test(text)
+          ? null
+          : parseAgentSwap(text);
+      /*
+       * Natural-language "available/all" native swaps.
+       * Uses the REAL wallet balance and keeps a small gas reserve.
+       */
+      if (!imageToSend && !swap) {
+        const availableMatch = text
+          .trim()
+          .match(
+            /^swap\s+(?:my\s+)?(?:available|all)\s+(BNB|ETH|POL)\s+(?:to|for)\s+(USDT|USDC)$/i
+          );
+
+        if (availableMatch) {
+          const sellSymbol =
+            availableMatch[1].toUpperCase();
+
+          const buySymbol =
+            availableMatch[2].toUpperCase();
+
+          const nativeChainMap: Record<string, number> = {
+            BNB: 56,
+            ETH: 1,
+            POL: 137,
+          };
+
+          const tokenMap: Record<
+            string,
+            Record<string, string>
+          > = {
+            BNB: {
+              USDT: TOKEN_ADDRESSES.bnb.usdt,
+              USDC: TOKEN_ADDRESSES.bnb.usdc,
+            },
+            ETH: {
+              USDT: TOKEN_ADDRESSES.ethereum.usdt,
+              USDC: TOKEN_ADDRESSES.ethereum.usdc,
+            },
+            POL: {
+              USDT: TOKEN_ADDRESSES.polygon.usdt,
+              USDC: TOKEN_ADDRESSES.polygon.usdc,
+            },
+          };
+
+          const detectedChainId =
+            nativeChainMap[sellSymbol];
+
+          const detectedAsset =
+            allWalletAssets.find(
+              (asset) =>
+                asset.chainId === detectedChainId &&
+                asset.symbol === sellSymbol &&
+                asset.type === "native"
+            );
+
+          if (detectedAsset) {
+            const available = cleanNumber(
+              detectedAsset.balance
+            );
+
+            /*
+             * Keep some native currency for gas.
+             */
+            const gasReserve =
+              sellSymbol === "BNB"
+                ? 0.00001
+                : 0.00005;
+
+            const spendable = Math.max(
+              0,
+              available - gasReserve
+            );
+
+            const buyAddress =
+              tokenMap[sellSymbol]?.[buySymbol];
+
+            if (spendable > 0 && buyAddress) {
+              swap = {
+                amount: spendable.toString(),
+                sellSymbol,
+                buySymbol,
+                chainId: detectedChainId,
+                sellToken:
+                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                buyToken: buyAddress,
+                sellDecimals: 18,
+                buyDecimals: 18,
+              };
+            }
+          }
+        }
+      }
 
       if (swap) {
         if (
@@ -569,37 +1478,115 @@ const walletReconnecting = isReconnecting;
           return;
         }
 
-        if (!walletBalance) {
-          setMessages((current) => [
-            ...current,
-            {
-              role: "assistant",
-              text:
-                "I couldn't read your wallet balance yet. Please wait a moment and try again.",
-            },
-          ]);
-
-          return;
-        }
-
         if (chainId !== swap.chainId) {
           setMessages((current) => [
             ...current,
             {
               role: "assistant",
               text:
-                "Your wallet is connected, but it is currently on the wrong network. Switch to BNB Chain and try the swap again.",
+                `Your wallet is connected to the wrong network.\n\n` +
+                `This swap requires BNB Chain.\n` +
+                `Current network: ${
+                  chainId === 1
+                    ? "Ethereum"
+                    : chainId === 8453
+                      ? "Base"
+                      : chainId === 137
+                        ? "Polygon"
+                        : chainId === 42161
+                          ? "Arbitrum"
+                          : chainId === 10
+                            ? "Optimism"
+                            : chainId === 56
+                              ? "BNB Chain"
+                              : `Chain ${chainId}`
+                }\n\n` +
+                `Switch networks and try again.`,
             },
           ]);
 
           return;
         }
 
-        const balanceFormatted =
-          walletBalance.formatted;
+        /*
+         * CRITICAL SAFETY CHECK:
+         *
+         * Check the ACTUAL token being sold before asking 0x
+         * for a quote. We do NOT use the native gas balance
+         * when the user is selling an ERC-20 token.
+         */
+        const sellAsset =
+          getSwapBalance(
+            swap.chainId,
+            swap.sellSymbol,
+            swap.sellToken
+          );
 
-        const balanceSymbol =
-          walletBalance.symbol;
+        if (!sellAsset) {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              text:
+                `I couldn't read your ${swap.sellSymbol} balance on this network, so I won't create a swap transaction.`,
+            },
+          ]);
+
+          return;
+        }
+
+        const availableAmount =
+          cleanNumber(
+            sellAsset.balance
+          );
+
+        const requestedAmountNumber =
+          Number(swap.amount);
+
+        if (
+          !Number.isFinite(
+            requestedAmountNumber
+          )
+        ) {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              text:
+                "I couldn't understand the swap amount. Please enter a valid amount.",
+            },
+          ]);
+
+          return;
+        }
+
+        if (
+          availableAmount <
+          requestedAmountNumber
+        ) {
+          const shortfall =
+            requestedAmountNumber -
+            availableAmount;
+
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              text:
+                `❌ Insufficient ${swap.sellSymbol} balance.\n\n` +
+                `Requested: ${swap.amount} ${swap.sellSymbol}\n` +
+                `Available: ${formatAmount(
+                  sellAsset.balance
+                )} ${swap.sellSymbol}\n` +
+                `Shortfall: ${formatAmount(
+                  shortfall.toString()
+                )} ${swap.sellSymbol}\n\n` +
+                `I have NOT requested a quote or created a transaction.`,
+            },
+          ]);
+
+          return;
+        }
 
         let requestedAmount: bigint;
 
@@ -621,25 +1608,6 @@ const walletReconnecting = isReconnecting;
           return;
         }
 
-        if (
-          requestedAmount >
-          walletBalance.value
-        ) {
-          setMessages((current) => [
-            ...current,
-            {
-              role: "assistant",
-              text:
-                `Insufficient ${balanceSymbol} balance.\n\n` +
-                `Wallet balance: ${balanceFormatted} ${balanceSymbol}\n` +
-                `Requested: ${swap.amount} ${swap.sellSymbol}\n\n` +
-                `You need more ${balanceSymbol} before I can prepare this swap.`,
-            },
-          ]);
-
-          return;
-        }
-
         const sellAmount =
           requestedAmount.toString();
 
@@ -648,19 +1616,23 @@ const walletReconnecting = isReconnecting;
           {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
+              "Content-Type":
+                "application/json",
             },
             body: JSON.stringify({
               chainId: swap.chainId,
-              sellToken: swap.sellToken,
-              buyToken: swap.buyToken,
+              sellToken:
+                swap.sellToken,
+              buyToken:
+                swap.buyToken,
               sellAmount,
               taker: address,
             }),
           }
         );
 
-        const data = await response.json();
+        const data =
+          await response.json();
 
         if (!response.ok) {
           throw new Error(
@@ -677,10 +1649,37 @@ const walletReconnecting = isReconnecting;
           );
         }
 
+        /*
+         * 0x can also report balance problems in the quote
+         * response. Treat those as a hard stop.
+         */
+        if (
+          quote.issues?.balance
+        ) {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              text:
+                `❌ The swap could not pass the wallet balance check.\n\n` +
+                `Requested: ${swap.amount} ${swap.sellSymbol}\n` +
+                `Available: ${formatAmount(
+                  sellAsset.balance
+                )} ${swap.sellSymbol}\n\n` +
+                `No transaction was authorized.`,
+            },
+          ]);
+
+          return;
+        }
+
         const buyAmount =
           quote.buyAmount
-            ? Number(quote.buyAmount) /
-              10 ** swap.buyDecimals
+            ? Number(
+                quote.buyAmount
+              ) /
+              10 **
+                swap.buyDecimals
             : 0;
 
         if (
@@ -693,7 +1692,8 @@ const walletReconnecting = isReconnecting;
             data: quote.transaction
               .data as `0x${string}`,
             value: BigInt(
-              quote.transaction.value || "0"
+              quote.transaction
+                .value || "0"
             ),
           });
         } else {
@@ -715,12 +1715,14 @@ const walletReconnecting = isReconnecting;
           {
             role: "assistant",
             text:
-              `I found a live BNB → USDC quote.\n\n` +
-              `Wallet balance: ${balanceFormatted} ${balanceSymbol}\n` +
-              `Sell: ${swap.amount} BNB\n` +
-              `Estimated receive: ${formattedBuyAmount} USDC\n\n` +
+              `I found a live ${swap.sellSymbol} → ${swap.buySymbol} transaction.\n\n` +
+              `Sell: ${swap.amount} ${swap.sellSymbol}\n` +
+              `Available: ${formatAmount(
+                sellAsset.balance
+              )} ${swap.sellSymbol}\n` +
+              `Estimated receive: ${formattedBuyAmount} ${swap.buySymbol}\n\n` +
               `Network: BNB Chain\n\n` +
-              `The quote is ready. I have NOT moved any funds or asked your wallet to approve anything.`,
+              `The transaction is ready. I have NOT moved any funds or asked your wallet to approve anything.`,
           },
         ]);
 
@@ -732,7 +1734,8 @@ const walletReconnecting = isReconnecting;
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
           body: JSON.stringify({
             message: text,
@@ -743,26 +1746,33 @@ const walletReconnecting = isReconnecting;
               !walletReconnecting
                 ? {
                     connected: true,
-                    address: address || null,
-                    chainId: chainId || null,
+                    address:
+                      address || null,
+                    chainId:
+                      chainId || null,
                     balance:
-                      walletBalance?.formatted ||
+                      walletBalance
+                        ?.formatted ||
                       null,
                     symbol:
                       walletBalance?.symbol ||
                       null,
-                    balances: allWalletBalances,
+                    balances:
+                      allWalletAssets,
                   }
                 : null,
             imageData:
-              imageToSend?.data || null,
+              imageToSend?.data ||
+              null,
             imageMimeType:
-              imageToSend?.mimeType || null,
+              imageToSend?.mimeType ||
+              null,
           }),
         }
       );
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       if (!response.ok) {
         throw new Error(
@@ -776,7 +1786,8 @@ const walletReconnecting = isReconnecting;
         {
           role: "assistant",
           text:
-            typeof data.response === "string"
+            typeof data.response ===
+            "string"
               ? data.response
               : "Agora couldn't generate a response.",
         },
@@ -807,33 +1818,115 @@ const walletReconnecting = isReconnecting;
               className="brand"
               onClick={saveCurrentChat}
             >
-              <div className="logo">A</div>
+              <div className="logo">
+                A
+              </div>
 
               <div className="brand-copy">
-                <strong>AGORA</strong>
-                <span>AI & Web3 Agent</span>
+                <strong>
+                  AGORA
+                </strong>
+                <span>
+                  AI & Web3 Agent
+                </span>
               </div>
             </Link>
           </div>
 
           <div className="header-actions">
-            {address && !walletReconnecting && (
-              <button
-                type="button"
-                className="wallet-button"
-                onClick={() => disconnect()}
-                title="Disconnect wallet"
-              >
-                {address.slice(0, 6)}…
-                {address.slice(-4)}
-              </button>
-            )}
-
             {walletReconnecting && (
               <div className="wallet-status">
                 Reconnecting…
               </div>
             )}
+
+            <div className="account-wrap">
+              <button
+                type="button"
+                className="account-button"
+                onClick={() =>
+                  setAccountOpen(
+                    (current) => !current
+                  )
+                }
+                aria-expanded={accountOpen}
+                aria-label="Open Agora account"
+              >
+                <span className="account-avatar">
+                  {googleUser?.email?.[0]?.toUpperCase() ||
+                    address?.[2]?.toUpperCase() ||
+                    "A"}
+                </span>
+
+                <span className="account-label">
+                  Account
+                </span>
+              </button>
+
+              {accountOpen && (
+                <div className="account-menu">
+                  <div className="account-menu-title">
+                    Agora Account
+                  </div>
+
+                  <div className="account-row">
+                    <span>Google</span>
+                    <strong>
+                      {googleUser?.email ||
+                        "Not connected"}
+                    </strong>
+                  </div>
+
+                  <div className="account-row">
+                    <span>Wallet</span>
+                    <strong>
+                      {address
+                        ? `${address.slice(
+                            0,
+                            6
+                          )}…${address.slice(-4)}`
+                        : "Not connected"}
+                    </strong>
+                  </div>
+
+                  <div className="account-divider" />
+
+                  {googleUser && (
+                    <button
+                      type="button"
+                      className="account-action"
+                      onClick={() =>
+                        void disconnectGoogle()
+                      }
+                    >
+                      Disconnect Google
+                    </button>
+                  )}
+
+                  {isConnected && (
+                    <button
+                      type="button"
+                      className="account-action"
+                      onClick={
+                        disconnectWallet
+                      }
+                    >
+                      Disconnect Wallet
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className="account-action account-lock"
+                    onClick={() =>
+                      void lockAgora()
+                    }
+                  >
+                    Lock Agora
+                  </button>
+                </div>
+              )}
+            </div>
 
             <button
               className="theme-button"
@@ -841,12 +1934,33 @@ const walletReconnecting = isReconnecting;
               aria-label="Toggle theme"
               type="button"
             >
-              {theme === "light" ? "☾" : "☀"}
+              {theme === "light"
+                ? "☾"
+                : "☀"}
             </button>
 
             <div className="online">
               <span className="online-dot" />
-              Online
+              {walletReconnecting
+                ? "Connecting..."
+                : isConnected
+                  ? chainId === 1
+                    ? "Ethereum"
+                    : chainId === 8453
+                      ? "Base"
+                      : chainId === 137
+                        ? "Polygon"
+                        : chainId ===
+                            42161
+                          ? "Arbitrum"
+                          : chainId ===
+                              10
+                            ? "Optimism"
+                            : chainId ===
+                                56
+                              ? "BNB Chain"
+                              : `Chain ${chainId}`
+                  : "Online"}
             </div>
           </div>
         </header>
@@ -865,7 +1979,9 @@ const walletReconnecting = isReconnecting;
               <span />
             </span>
 
-            <span>History</span>
+            <span>
+              History
+            </span>
           </Link>
         </div>
       </div>
@@ -873,40 +1989,49 @@ const walletReconnecting = isReconnecting;
       <section className="chat-area">
         <div className="chat-inner">
           <div className="intro">
-            <div className="intro-logo">A</div>
+            <div className="intro-logo">
+              A
+            </div>
 
             <div>
               <h1>Agora</h1>
               <p>
-                AI companion for Web3, crypto, and
-                beyond.
+                AI companion for Web3,
+                crypto, and beyond.
               </p>
             </div>
           </div>
 
           <div className="messages">
-            {messages.map((message, index) => (
-              <div
-                key={index}
-                className={
-                  message.role === "user"
-                    ? "message user-message"
-                    : "message assistant-message"
-                }
-              >
-                <div className="bubble">
-                  {message.image && (
-                    <img
-                      src={message.image}
-                      alt="Uploaded image"
-                      className="message-image"
-                    />
-                  )}
+            {messages.map(
+              (message, index) => (
+                <div
+                  key={index}
+                  className={
+                    message.role ===
+                    "user"
+                      ? "message user-message"
+                      : "message assistant-message"
+                  }
+                >
+                  <div className="bubble">
+                    {message.image && (
+                      <img
+                        src={
+                          message.image
+                        }
+                        alt="Uploaded image"
+                        className="message-image"
+                      />
+                    )}
 
-                  <div>{message.text}</div>
+                    <div>
+                      {message.text}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            )}
 
             {pendingTransaction && (
               <div className="swap-authorization-card">
@@ -915,16 +2040,22 @@ const walletReconnecting = isReconnecting;
                 </div>
 
                 <div className="swap-authorization-text">
-                  Your swap quote is ready. Review
-                  the transaction and authorize it
-                  with your wallet.
+                  Your swap quote is
+                  ready. Review the
+                  transaction and
+                  authorize it with your
+                  wallet.
                 </div>
 
                 <button
                   type="button"
                   className="swap-authorization-button"
-                  onClick={authorizeSwap}
-                  disabled={transactionLoading}
+                  onClick={
+                    authorizeSwap
+                  }
+                  disabled={
+                    transactionLoading
+                  }
                 >
                   {transactionLoading
                     ? "Waiting for Wallet..."
@@ -954,21 +2085,27 @@ const walletReconnecting = isReconnecting;
           ref={fileInputRef}
           type="file"
           accept="image/png,image/jpeg,image/webp"
-          onChange={handleImageChange}
+          onChange={
+            handleImageChange
+          }
           className="hidden-file-input"
         />
 
         {selectedImage && (
           <div className="attachment-preview">
             <img
-              src={selectedImage.preview}
+              src={
+                selectedImage.preview
+              }
               alt="Selected image"
             />
 
             <button
               type="button"
               className="remove-image-button"
-              onClick={removeSelectedImage}
+              onClick={
+                removeSelectedImage
+              }
               aria-label="Remove image"
             >
               ×
@@ -979,7 +2116,9 @@ const walletReconnecting = isReconnecting;
         <button
           type="button"
           className="attach-button"
-          onClick={openImagePicker}
+          onClick={
+            openImagePicker
+          }
           disabled={loading}
           aria-label="Attach image"
           title="Attach image"
@@ -990,7 +2129,9 @@ const walletReconnecting = isReconnecting;
         <input
           value={input}
           onChange={(event) =>
-            setInput(event.target.value)
+            setInput(
+              event.target.value
+            )
           }
           placeholder={
             selectedImage
@@ -1003,7 +2144,8 @@ const walletReconnecting = isReconnecting;
         <button
           type="submit"
           disabled={
-            loading || !input.trim()
+            loading ||
+            !input.trim()
           }
           aria-label="Send message"
         >
@@ -1023,7 +2165,9 @@ const walletReconnecting = isReconnecting;
         <Link
           href="/swap"
           className="nav-bubble"
-          onClick={saveCurrentChat}
+          onClick={
+            saveCurrentChat
+          }
         >
           <span className="nav-icon swap-icon" />
           Swap
@@ -1032,7 +2176,9 @@ const walletReconnecting = isReconnecting;
         <Link
           href="/portfolio"
           className="nav-bubble"
-          onClick={saveCurrentChat}
+          onClick={
+            saveCurrentChat
+          }
         >
           <span className="nav-icon portfolio-icon" />
           Portfolio
@@ -1041,7 +2187,9 @@ const walletReconnecting = isReconnecting;
         <Link
           href="/tools"
           className="nav-bubble"
-          onClick={saveCurrentChat}
+          onClick={
+            saveCurrentChat
+          }
         >
           <span className="nav-icon tools-icon" />
           Tools
@@ -1050,7 +2198,9 @@ const walletReconnecting = isReconnecting;
         <Link
           href="/explore"
           className="nav-bubble"
-          onClick={saveCurrentChat}
+          onClick={
+            saveCurrentChat
+          }
         >
           <span className="nav-icon explore-icon" />
           Explore
@@ -1215,25 +2365,127 @@ const walletReconnecting = isReconnecting;
           font-size: 18px;
         }
 
-        .wallet-button {
+        .account-wrap {
+          position: relative;
+        }
+
+        .account-button {
           min-height: 38px;
+          padding: 4px 10px 4px 5px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          background: var(--surface);
+          color: var(--text);
+          cursor: pointer;
+          transition:
+            background 0.15s ease,
+            transform 0.15s ease,
+            border-color 0.15s ease;
+        }
+
+        .account-button:hover {
+          background: var(--yellow);
+          color: #050505;
+          border-color: var(--yellow);
+          transform: translateY(-1px);
+        }
+
+        .account-avatar {
+          width: 29px;
+          height: 29px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          background: var(--yellow);
+          color: #050505;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .account-label {
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .account-menu {
+          position: absolute;
+          top: calc(100% + 10px);
+          right: 0;
+          z-index: 100;
+          width: 310px;
+          padding: 16px;
+          border: 1px solid var(--border);
+          border-radius: 18px;
+          background: var(--surface);
+          box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+        }
+
+        .account-menu-title {
+          margin-bottom: 14px;
+          color: var(--text);
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .account-row {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          padding: 10px 0;
+        }
+
+        .account-row span {
+          color: var(--muted);
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+
+        .account-row strong {
+          overflow: hidden;
+          color: var(--text);
+          font-size: 12px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .account-divider {
+          height: 1px;
+          margin: 8px 0;
+          background: var(--border);
+        }
+
+        .account-action {
+          width: 100%;
+          min-height: 40px;
+          margin-top: 7px;
           padding: 0 12px;
           border: 1px solid var(--border);
           border-radius: 12px;
-          background: var(--surface);
+          background: var(--surface-2);
           color: var(--text);
-          font-size: 11px;
-          font-weight: 700;
           cursor: pointer;
+          font-size: 11px;
+          font-weight: 800;
+          text-align: left;
           transition:
             background 0.15s ease,
             transform 0.15s ease;
         }
 
-        .wallet-button:hover {
+        .account-action:hover {
           background: var(--yellow);
           color: #050505;
           transform: translateY(-1px);
+        }
+
+        .account-lock {
+          border-color: var(--yellow);
         }
 
         .wallet-status {
@@ -1771,11 +3023,25 @@ const walletReconnecting = isReconnecting;
             height: 44px;
           }
 
-          .wallet-button {
-            max-width: 105px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+          .account-label {
+            display: none;
+          }
+
+          .account-button {
+            width: 38px;
+            height: 38px;
+            padding: 4px;
+            justify-content: center;
+          }
+
+          .account-menu {
+            position: fixed;
+            top: 78px;
+            right: 12px;
+            left: 12px;
+            width: auto;
+            max-width: none;
+            border-radius: 20px;
           }
 
           .online {
@@ -1790,3 +3056,7 @@ const walletReconnecting = isReconnecting;
     </main>
   );
 }
+
+
+
+
