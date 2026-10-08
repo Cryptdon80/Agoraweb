@@ -94,7 +94,7 @@ function getTokenDecimals(token: string): number {
 export default function SwapPage() {
   const { theme, toggleTheme } = useTheme();
 
-  const { address, isConnected } = useAccount();
+  const { address } = useAccount();
 
   const chainId = useChainId();
 
@@ -451,15 +451,6 @@ export default function SwapPage() {
         );
       }
 
-      /*
-       * ERC-20 approval.
-       *
-       * Native ETH/BNB/POL does not require
-       * an ERC-20 approval.
-       *
-       * For ERC-20 tokens, 0x tells us the
-       * correct AllowanceHolder spender.
-       */
       if (!isNativeFrom) {
         const allowanceIssue =
           quote.issues?.allowance;
@@ -533,10 +524,6 @@ export default function SwapPage() {
         }
       }
 
-      /*
-       * Now authorize the actual
-       * 0x swap transaction.
-       */
       setTransactionStatus(
         "Confirm the swap in your wallet..."
       );
@@ -585,15 +572,15 @@ export default function SwapPage() {
       );
       setSwapConfirmed(true);
 
-setTimeout(() => {
-  setShowReview(false);
-  setAmount("");
-  setQuote(null);
-  setQuoteError("");
-  setTransactionStatus("");
-  setTransactionHash("");
-  setSwapConfirmed(false);
-}, 1500);
+      setTimeout(() => {
+        setShowReview(false);
+        setAmount("");
+        setQuote(null);
+        setQuoteError("");
+        setTransactionStatus("");
+        setTransactionHash("");
+        setSwapConfirmed(false);
+      }, 1500);
     } catch (error) {
       console.error(
         "Agora swap transaction error:",
@@ -1000,7 +987,7 @@ setTimeout(() => {
             type="button"
             className="review-button"
             disabled={
-              !isConnected ||
+              !address ||
               !isSupportedNetwork ||
               !validAmount ||
               quoteLoading
@@ -1010,7 +997,7 @@ setTimeout(() => {
               await getQuote();
             }}
           >
-            {!isConnected
+            {!address
               ? "Connect wallet to continue"
               : !isSupportedNetwork
                 ? "Switch to a supported network"
@@ -1065,12 +1052,14 @@ setTimeout(() => {
         <div className="review-overlay">
           <div className="review-panel">
             <button
-  type="button"
-  className="review-close"
-  onClick={() => setShowReview(false)}
->
-  ×
-</button>
+              type="button"
+              className="review-close"
+              onClick={() =>
+                setShowReview(false)
+              }
+            >
+              ×
+            </button>
 
             <div className="review-title">
               Review Swap
@@ -1671,7 +1660,7 @@ setTimeout(() => {
           width: min(470px, 100%);
           max-height: calc(100vh - 40px);
           overflow-y: auto;
-          scrllbar-width: none;
+          scrollbar-width: none;
           -ms-overflow-style: none;
           padding: 25px;
           border: 1px solid var(--border);

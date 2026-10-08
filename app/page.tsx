@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useState,
+} from "react";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { useRouter } from "next/navigation";
+import { firebaseAuth } from "./lib/firebase";
 
 type Message = {
   role: "user" | "assistant";
@@ -28,11 +35,29 @@ function AgoraLogo() {
 }
 
 export default function Home() {
+  const router = useRouter();
+
   const [input, setInput] = useState("");
   const [darkMode, setDarkMode] = useState(true);
   const [active, setActive] = useState("Chat");
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] =
+    useState<Message[]>(initialMessages);
   const [loading, setLoading] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      firebaseAuth,
+      (user) => {
+        setUserEmail(user?.email ?? null);
+        setAuthReady(true);
+      },
+    );
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("agora-theme");
@@ -43,10 +68,29 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("agora-theme", darkMode ? "dark" : "light");
+    localStorage.setItem(
+      "agora-theme",
+      darkMode ? "dark" : "light",
+    );
   }, [darkMode]);
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+  async function handleSignOut() {
+    if (signingOut) return;
+
+    setSigningOut(true);
+
+    try {
+      await signOut(firebaseAuth);
+      router.replace("/connect");
+    } catch (error) {
+      console.error("Agora sign out error:", error);
+      setSigningOut(false);
+    }
+  }
+
+  async function sendMessage(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault();
 
     const text = input.trim();
@@ -78,7 +122,9 @@ export default function Home() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Something went wrong.");
+        throw new Error(
+          data.error || "Something went wrong.",
+        );
       }
 
       setMessages((current) => [
@@ -95,7 +141,8 @@ export default function Home() {
         ...current,
         {
           role: "assistant",
-          text: "Something went wrong while connecting to Agora. Please try again.",
+          text:
+            "Something went wrong while connecting to Agora. Please try again.",
         },
       ]);
     } finally {
@@ -108,14 +155,20 @@ export default function Home() {
   }
 
   return (
-    <main className={darkMode ? "app dark" : "app light"}>
+    <main
+      className={
+        darkMode ? "app dark" : "app light"
+      }
+    >
       <aside className="sidebar">
         <div className="brand">
           <AgoraLogo />
 
           <div>
             <div className="brand-name">AGORA</div>
-            <div className="brand-subtitle">Chat. Swap. Build.</div>
+            <div className="brand-subtitle">
+              Chat. Swap. Build.
+            </div>
           </div>
         </div>
 
@@ -129,7 +182,11 @@ export default function Home() {
           ].map(([name, icon]) => (
             <button
               key={name}
-              className={active === name ? "nav-item active" : "nav-item"}
+              className={
+                active === name
+                  ? "nav-item active"
+                  : "nav-item"
+              }
               onClick={() => setActive(name)}
             >
               <span>{icon}</span>
@@ -139,9 +196,15 @@ export default function Home() {
         </nav>
 
         <div className="recent">
-          <div className="section-label">Recent Chats</div>
+          <div className="section-label">
+            Recent Chats
+          </div>
 
-          <button onClick={() => quickPrompt("Swap 50 USDT to SOL")}>
+          <button
+            onClick={() =>
+              quickPrompt("Swap 50 USDT to SOL")
+            }
+          >
             <span>▣</span>
             <div>
               <strong>Swap USDT to SOL</strong>
@@ -149,7 +212,13 @@ export default function Home() {
             </div>
           </button>
 
-          <button onClick={() => quickPrompt("What are the current crypto market trends?")}>
+          <button
+            onClick={() =>
+              quickPrompt(
+                "What are the current crypto market trends?",
+              )
+            }
+          >
             <span>▣</span>
             <div>
               <strong>Current market trends</strong>
@@ -157,14 +226,27 @@ export default function Home() {
             </div>
           </button>
 
-          <button onClick={() => quickPrompt("What are the best DeFi platforms?")}>
+          <button
+            onClick={() =>
+              quickPrompt(
+                "What are the best DeFi platforms?",
+              )
+            }
+          >
             <span>▣</span>
             <div>
               <strong>Best DeFi platforms</strong>
               <small>28 min ago</small>
             </div>
           </button>
-          <button onClick={() => quickPrompt("Help me build a simple dApp")}>
+
+          <button
+            onClick={() =>
+              quickPrompt(
+                "Help me build a simple dApp",
+              )
+            }
+          >
             <span>▣</span>
             <div>
               <strong>Build a simple dApp</strong>
@@ -174,14 +256,29 @@ export default function Home() {
         </div>
 
         <div className="profile">
-          <div className="avatar">D</div>
+          <div className="avatar">
+            {userEmail
+              ? userEmail.charAt(0).toUpperCase()
+              : "D"}
+          </div>
 
           <div className="profile-info">
-            <strong>Donjayy</strong>
+            <strong>
+              {userEmail || "Donjayy"}
+            </strong>
+
             <span>Web3 Explorer</span>
           </div>
 
-          <button className="settings">⚙</button>
+          <button
+            className="settings"
+            onClick={handleSignOut}
+            disabled={!authReady || signingOut}
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            {signingOut ? "…" : "↪"}
+          </button>
         </div>
 
         <div className="online">
@@ -194,16 +291,26 @@ export default function Home() {
         <header className="chat-header">
           <div>
             <h1>Good evening, Donjayy 👋</h1>
-            <p>Your AI companion for Web3, crypto, and beyond.</p>
+            <p>
+              Your AI companion for Web3, crypto, and beyond.
+            </p>
           </div>
 
           <button
             className="theme-toggle"
-            onClick={() => setDarkMode((current) => !current)}
+            onClick={() =>
+              setDarkMode((current) => !current)
+            }
             aria-label="Toggle theme"
           >
             <span>☀</span>
-            <span className={darkMode ? "selected" : ""}>☾</span>
+            <span
+              className={
+                darkMode ? "selected" : ""
+              }
+            >
+              ☾
+            </span>
           </button>
         </header>
 
@@ -251,7 +358,10 @@ export default function Home() {
         </div>
 
         <div className="composer-area">
-          <form className="composer" onSubmit={sendMessage}>
+          <form
+            className="composer"
+            onSubmit={sendMessage}
+          >
             <button
               type="button"
               className="plus-button"
@@ -262,7 +372,9 @@ export default function Home() {
 
             <input
               value={input}
-              onChange={(event) => setInput(event.target.value)}
+              onChange={(event) =>
+                setInput(event.target.value)
+              }
               placeholder="Ask Agora anything..."
               disabled={loading}
             />
@@ -270,26 +382,50 @@ export default function Home() {
             <button
               className="send-button"
               type="submit"
-              disabled={loading || !input.trim()}
+              disabled={
+                loading || !input.trim()
+              }
             >
               ↗
             </button>
           </form>
 
           <div className="quick-actions">
-            <button onClick={() => quickPrompt("Swap 50 USDT to SOL")}>
+            <button
+              onClick={() =>
+                quickPrompt("Swap 50 USDT to SOL")
+              }
+            >
               ⇄ Swap assets
             </button>
 
-            <button onClick={() => quickPrompt("Check the current price of SOL")}>
+            <button
+              onClick={() =>
+                quickPrompt(
+                  "Check the current price of SOL",
+                )
+              }
+            >
               ◈ Check prices
             </button>
 
-            <button onClick={() => quickPrompt("Show me my portfolio")}>
+            <button
+              onClick={() =>
+                quickPrompt(
+                  "Show me my portfolio",
+                )
+              }
+            >
               ▣ Show portfolio
             </button>
 
-            <button onClick={() => quickPrompt("Explore DeFi opportunities")}>
+            <button
+              onClick={() =>
+                quickPrompt(
+                  "Explore DeFi opportunities",
+                )
+              }
+            >
               ◉ Explore DeFi
             </button>
           </div>
@@ -303,13 +439,18 @@ export default function Home() {
             <strong>Quick Swap</strong>
             <button>⚙</button>
           </div>
+
           <div className="token-box">
             <small>From</small>
+
             <div className="token-line">
-              <span className="token-icon green">₮</span>
+              <span className="token-icon green">
+                ₮
+              </span>
               <strong>USDT</strong>
               <span className="amount">50</span>
             </div>
+
             <small>≈ $50.00</small>
           </div>
 
@@ -317,24 +458,32 @@ export default function Home() {
 
           <div className="token-box">
             <small>To</small>
+
             <div className="token-line">
-              <span className="token-icon purple">S</span>
+              <span className="token-icon purple">
+                S
+              </span>
               <strong>SOL</strong>
-              <span className="amount">0.7224</span>
+              <span className="amount">
+                0.7224
+              </span>
             </div>
+
             <small>≈ $49.87</small>
           </div>
 
           <button
             className="swap-button"
-            onClick={() => quickPrompt("Swap 50 USDT to SOL")}
+            onClick={() =>
+              quickPrompt("Swap 50 USDT to SOL")
+            }
           >
             Swap Now
           </button>
 
           <p className="swap-note">
-            Agora will always show the quote and fees before asking you to
-            authorize a transaction.
+            Agora will always show the quote and fees
+            before asking you to authorize a transaction.
           </p>
         </section>
 
@@ -346,39 +495,55 @@ export default function Home() {
 
           <div className="balance">
             <small>Total Balance</small>
+
             <div>
-              $482.32 <span>+2.14% (24h)</span>
+              $482.32{" "}
+              <span>+2.14% (24h)</span>
             </div>
           </div>
 
           <div className="asset">
-            <span className="token-icon purple">S</span>
+            <span className="token-icon purple">
+              S
+            </span>
+
             <div>
               <strong>SOL</strong>
               <small>2.3412</small>
             </div>
+
             <b>+3.21%</b>
           </div>
 
           <div className="asset">
-            <span className="token-icon green">₮</span>
+            <span className="token-icon green">
+              ₮
+            </span>
+
             <div>
               <strong>USDT</strong>
               <small>289.45</small>
             </div>
+
             <b>+0.01%</b>
           </div>
 
           <div className="asset">
-            <span className="token-icon orange">₿</span>
+            <span className="token-icon orange">
+              ₿
+            </span>
+
             <div>
               <strong>BTC</strong>
               <small>0.0156</small>
             </div>
+
             <b>+1.87%</b>
           </div>
 
-          <button className="view-link">View portfolio →</button>
+          <button className="view-link">
+            View portfolio →
+          </button>
         </section>
 
         <section className="card">
@@ -387,16 +552,35 @@ export default function Home() {
             <strong>Tools</strong>
           </div>
 
-          <button className="tool">◉ Create Token</button>
-          <button className="tool">⌁ Find Opportunities</button>
-          <button className="tool">⌁ Analyze Portfolio</button>
-          <button className="tool">◈ Check Gas Fees</button>
+          <button className="tool">
+            ◉ Create Token
+          </button>
+
+          <button className="tool">
+            ⌁ Find Opportunities
+          </button>
+
+          <button className="tool">
+            ⌁ Analyze Portfolio
+          </button>
+
+          <button className="tool">
+            ◈ Check Gas Fees
+          </button>
         </section>
 
         <div className="tagline">
           <div>✧</div>
-          <strong>Smarter moves.<br />Bigger opportunities.</strong>
-          <span>Agora makes Web3 simple.</span>
+
+          <strong>
+            Smarter moves.
+            <br />
+            Bigger opportunities.
+          </strong>
+
+          <span>
+            Agora makes Web3 simple.
+          </span>
         </div>
       </aside>
 
@@ -452,7 +636,8 @@ export default function Home() {
           --text: #111111;
           --muted: #6f7379;
         }
-          .sidebar {
+
+        .sidebar {
           border-right: 1px solid var(--border);
           padding: 25px 15px 18px;
           display: flex;
@@ -586,11 +771,15 @@ export default function Home() {
 
         .profile-info {
           flex: 1;
+          min-width: 0;
         }
 
         .profile-info strong,
         .profile-info span {
           display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .profile-info strong {
@@ -604,9 +793,25 @@ export default function Home() {
         }
 
         .settings {
-          border: 0;
-          background: transparent;
+          width: 34px;
+          height: 34px;
+          border: 1px solid var(--border);
+          border-radius: 50%;
+          background: var(--panel-2);
           color: var(--muted);
+          display: grid;
+          place-items: center;
+        }
+
+        .settings:hover {
+          color: var(--yellow);
+          border-color: var(--yellow);
+          transform: scale(1.05);
+        }
+
+        .settings:disabled {
+          opacity: 0.55;
+          cursor: wait;
         }
 
         .online {
@@ -640,7 +845,8 @@ export default function Home() {
           align-items: center;
           padding: 20px 35px;
         }
-          .chat-header h1 {
+
+        .chat-header h1 {
           margin: 0;
           font-size: 24px;
         }
@@ -826,99 +1032,236 @@ export default function Home() {
           padding: 25px 15px;
           overflow-y: auto;
           background: var(--bg);
-          /* AGORA THEME OVERRIDES */
+        }
 
-.page {
-  background: var(--background) !important;
-  color: var(--text);
-}
+        .card {
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          background: var(--panel);
+          padding: 16px;
+          margin-bottom: 12px;
+        }
 
-.topbar {
-  background: var(--background) !important;
-  border-bottom: 1px solid var(--border) !important;
-}
+        .card-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 14px;
+        }
 
-.chat-area {
-  background: var(--background);
-}
+        .card-title strong {
+          flex: 1;
+          font-size: 13px;
+        }
 
-.intro p {
-  color: var(--muted) !important;
-}
+        .card-title button {
+          border: 0;
+          background: transparent;
+          color: var(--muted);
+        }
 
-.assistant-message .bubble {
-  background: var(--surface) !important;
-  border-color: var(--border) !important;
-  color: var(--text) !important;
-}
+        .token-box {
+          border: 1px solid var(--border);
+          border-radius: 13px;
+          padding: 12px;
+        }
 
-.composer {
-  background: var(--surface) !important;
-  border-color: var(--border) !important;
-}
+        .token-box small {
+          color: var(--muted);
+          font-size: 10px;
+        }
 
-.composer input {
-  color: var(--text) !important;
-}
+        .token-line {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 7px 0;
+        }
 
-.composer input::placeholder {
-  color: var(--muted) !important;
-}
+        .amount {
+          margin-left: auto;
+          font-weight: 700;
+        }
 
-.navigation {
-  background: var(--surface) !important;
-  border-color: var(--border) !important;
-}
+        .token-icon {
+          width: 27px;
+          height: 27px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          font-size: 12px;
+          font-weight: 800;
+        }
 
-.nav-bubble {
-  color: var(--muted) !important;
-}
+        .token-icon.green {
+          background: #1f8f62;
+          color: white;
+        }
 
-.nav-bubble:hover {
-  background: var(--surface-2) !important;
-  color: var(--text) !important;
-}
+        .token-icon.purple {
+          background: #6e58d9;
+          color: white;
+        }
 
-.nav-bubble.active {
-  background: var(--yellow) !important;
-  color: #050505 !important;
-}
+        .token-icon.orange {
+          background: #d87d1d;
+          color: white;
+        }
 
-.theme-button {
-  background: var(--surface) !important;
-  border-color: var(--border) !important;
-  color: var(--text) !important;
-}
+        .swap-arrow {
+          width: 30px;
+          height: 30px;
+          border-radius: 50%;
+          border: 1px solid var(--border);
+          background: var(--panel-2);
+          display: grid;
+          place-items: center;
+          margin: 7px auto;
+        }
 
-.online {
-  color: var(--muted) !important;
-}
+        .swap-button {
+          width: 100%;
+          border: 0;
+          border-radius: 12px;
+          padding: 11px;
+          margin-top: 12px;
+          background: var(--yellow);
+          color: #050505;
+          font-weight: 800;
+        }
 
-.brand span {
-  color: var(--muted) !important;
-}
+        .swap-note {
+          color: var(--muted);
+          font-size: 9px;
+          line-height: 1.5;
+          margin-bottom: 0;
+        }
 
-:root[data-theme="light"] .page {
-  background: #ffffff !important;
-}
+        .balance small,
+        .asset small {
+          color: var(--muted);
+          font-size: 10px;
+        }
 
-:root[data-theme="light"] .topbar {
-  background: #ffffff !important;
-}
+        .balance > div {
+          margin-top: 4px;
+          font-size: 22px;
+          font-weight: 800;
+        }
 
-:root[data-theme="light"] .composer {
-  background: #ffffff !important;
-}
+        .balance span {
+          color: #23e57a;
+          font-size: 10px;
+          font-weight: 600;
+        }
 
-:root[data-theme="light"] .navigation {
-  background: #ffffff !important;
-}
+        .asset {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          padding: 10px 0;
+          border-bottom: 1px solid var(--border);
+        }
 
-:root[data-theme="light"] .assistant-message .bubble {
-  background: #f7f7f7 !important;
-  color: #111111 !important;
-}
-          `}</style>
+        .asset > div {
+          flex: 1;
+        }
+
+        .asset strong,
+        .asset small {
+          display: block;
+        }
+
+        .asset strong {
+          font-size: 12px;
+        }
+
+        .asset b {
+          color: #23e57a;
+          font-size: 10px;
+        }
+
+        .view-link {
+          width: 100%;
+          border: 0;
+          background: transparent;
+          color: var(--yellow);
+          padding-top: 13px;
+          text-align: left;
+          font-size: 11px;
+        }
+
+        .tool {
+          width: 100%;
+          border: 0;
+          background: transparent;
+          color: var(--muted);
+          text-align: left;
+          padding: 8px 0;
+          font-size: 11px;
+        }
+
+        .tool:hover {
+          color: var(--text);
+        }
+
+        .tagline {
+          text-align: center;
+          color: var(--muted);
+          padding: 12px 5px;
+        }
+
+        .tagline div {
+          color: var(--yellow);
+          font-size: 20px;
+          margin-bottom: 8px;
+        }
+
+        .tagline strong {
+          color: var(--text);
+          display: block;
+          font-size: 15px;
+          line-height: 1.4;
+        }
+
+        .tagline span {
+          display: block;
+          margin-top: 7px;
+          font-size: 10px;
+        }
+
+        @media (max-width: 1100px) {
+          .app {
+            grid-template-columns: 220px minmax(0, 1fr);
+          }
+
+          .right-panel {
+            display: none;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .app {
+            display: block;
+          }
+
+          .sidebar {
+            display: none;
+          }
+
+          .chat-header {
+            padding: 18px;
+          }
+
+          .messages {
+            padding: 20px 18px;
+          }
+
+          .composer-area {
+            padding: 10px 18px 18px;
+          }
+        }
+      `}</style>
     </main>
   );
 }

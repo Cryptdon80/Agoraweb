@@ -1,7 +1,8 @@
 ﻿"use client";
 
 import {
-  FormEvent,
+  type ChangeEvent,
+  type FormEvent,
   useEffect,
   useRef,
   useState,
@@ -10,8 +11,9 @@ import Link from "next/link";
 import { parseUnits } from "viem";
 import {
   useAccount,
-  useChainId,
   useBalance,
+  useChainId,
+  useDisconnect,
   useSendTransaction,
 } from "wagmi";
 import { parseAgentSwap } from "../lib/agent-swap";
@@ -20,20 +22,169 @@ import { saveChatHistory } from "../lib/chat-history";
 
 type Theme = "light" | "dark";
 
+type PendingTransaction = {
+  to: `0x${string}`;
+  data: `0x${string}`;
+  value: bigint;
+};
+
 export default function ChatPage() {
   const [theme, setTheme] = useState<Theme>("light");
 
-  const { address, isConnected } = useAccount();
+  const {
+  address,
+  isConnected,
+  isReconnecting,
+} = useAccount();
+
+const { disconnect } = useDisconnect();
+
+const walletReconnecting = isReconnecting;
+
   const chainId = useChainId();
   const { sendTransactionAsync } = useSendTransaction();
 
+  // Active network balance.
+  // This stays separate because the swap system needs the
+  // balance of the currently selected network.
   const { data: walletBalance } = useBalance({
     address,
     chainId,
     query: {
-      enabled: Boolean(address),
+      enabled: Boolean(
+        address &&
+          isConnected &&
+          !walletReconnecting
+      ),
     },
   });
+
+  /*
+   * Agora wallet intelligence:
+   * Read the same connected wallet address across every
+   * supported network instead of only the currently selected chain.
+   */
+  const walletEnabled = Boolean(
+    address &&
+      isConnected &&
+      !walletReconnecting
+  );
+
+  const {
+    data: ethereumBalance,
+    isLoading: ethereumLoading,
+  } = useBalance({
+    address,
+    chainId: 1,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: baseBalance,
+    isLoading: baseLoading,
+  } = useBalance({
+    address,
+    chainId: 8453,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: polygonBalance,
+    isLoading: polygonLoading,
+  } = useBalance({
+    address,
+    chainId: 137,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: arbitrumBalance,
+    isLoading: arbitrumLoading,
+  } = useBalance({
+    address,
+    chainId: 42161,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: optimismBalance,
+    isLoading: optimismLoading,
+  } = useBalance({
+    address,
+    chainId: 10,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const {
+    data: bnbBalance,
+    isLoading: bnbLoading,
+  } = useBalance({
+    address,
+    chainId: 56,
+    query: {
+      enabled: walletEnabled,
+    },
+  });
+
+  const allWalletBalances = [
+    {
+      chainId: 1,
+      network: "Ethereum",
+      symbol: "ETH",
+      balance: ethereumBalance?.formatted || "0",
+    },
+    {
+      chainId: 8453,
+      network: "Base",
+      symbol: "ETH",
+      balance: baseBalance?.formatted || "0",
+    },
+    {
+      chainId: 137,
+      network: "Polygon",
+      symbol: "POL",
+      balance: polygonBalance?.formatted || "0",
+    },
+    {
+      chainId: 42161,
+      network: "Arbitrum",
+      symbol: "ETH",
+      balance: arbitrumBalance?.formatted || "0",
+    },
+    {
+      chainId: 10,
+      network: "Optimism",
+      symbol: "ETH",
+      balance: optimismBalance?.formatted || "0",
+    },
+    {
+      chainId: 56,
+      network: "BNB Chain",
+      symbol: "BNB",
+      balance: bnbBalance?.formatted || "0",
+    },
+  ];
+
+  const allWalletBalancesLoading =
+    walletEnabled &&
+    (
+      ethereumLoading ||
+      baseLoading ||
+      polygonLoading ||
+      arbitrumLoading ||
+      optimismLoading ||
+      bnbLoading
+    );
 
   const { messages, setMessages } = useChat();
 
@@ -47,14 +198,11 @@ export default function ChatPage() {
     name: string;
   } | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef =
+    useRef<HTMLInputElement | null>(null);
 
   const [pendingTransaction, setPendingTransaction] =
-    useState<{
-      to: `0x${string}`;
-      data: `0x${string}`;
-      value: bigint;
-    } | null>(null);
+    useState<PendingTransaction | null>(null);
 
   const [transactionLoading, setTransactionLoading] =
     useState(false);
@@ -75,17 +223,21 @@ export default function ChatPage() {
   }
 
   function openImagePicker() {
-    if (loading) return;
+    if (loading) {
+      return;
+    }
 
     fileInputRef.current?.click();
   }
 
   function handleImageChange(
-    event: React.ChangeEvent<HTMLInputElement>
+    event: ChangeEvent<HTMLInputElement>
   ) {
     const file = event.target.files?.[0];
 
-    if (!file) return;
+    if (!file) {
+      return;
+    }
 
     const allowedTypes = [
       "image/png",
@@ -150,7 +302,35 @@ export default function ChatPage() {
   }
 
   async function authorizeSwap() {
-    if (!pendingTransaction || !isConnected) return;
+    if (!pendingTransaction) {
+      return;
+    }
+
+    if (!isConnected || !address) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text:
+            "Your wallet isn't connected. Connect your wallet before authorizing this swap.",
+        },
+      ]);
+
+      return;
+    }
+
+    if (walletReconnecting) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text:
+            "Your wallet is reconnecting. Please wait a moment and try again.",
+        },
+      ]);
+
+      return;
+    }
 
     try {
       setTransactionLoading(true);
@@ -227,9 +407,126 @@ export default function ChatPage() {
 
     const text = input.trim();
 
-    if (!text || loading) return;
+    if (!text || loading) {
+      return;
+    }
 
     const imageToSend = selectedImage;
+
+    const walletQuestion =
+      /\b(wallet|balance|balances|assets|holdings|portfolio|funds|tokens)\b/i.test(
+        text
+      );
+
+    /*
+     * Wagmi may still be restoring the persisted wallet
+     * immediately after a page refresh.
+     *
+     * Do not tell the user that their wallet is disconnected
+     * while that reconnection is still happening.
+     */
+    if (walletQuestion && walletReconnecting) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "user",
+          text,
+        },
+        {
+          role: "assistant",
+          text:
+            "I'm reconnecting your wallet. Give me a moment, then ask me again.",
+        },
+      ]);
+
+      setInput("");
+      setSelectedImage(null);
+
+      return;
+    }
+
+    /*
+     * Only show the disconnected message when Wagmi has
+     * finished reconnecting and there is genuinely no wallet.
+     */
+    if (
+      walletQuestion &&
+      !isConnected &&
+      !address &&
+      !walletReconnecting
+    ) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "user",
+          text,
+        },
+        {
+          role: "assistant",
+          text:
+            "Your wallet isn't connected yet. Connect your wallet first, and I'll be able to read the wallet information available to Agora.",
+        },
+      ]);
+
+      setInput("");
+      setSelectedImage(null);
+
+      return;
+    }
+
+    /*
+     * For wallet questions, wait until ALL supported networks
+     * have finished loading. This prevents Agora from answering
+     * with only whichever network happens to load first.
+     */
+    if (
+      walletQuestion &&
+      isConnected &&
+      allWalletBalancesLoading
+    ) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "user",
+          text,
+        },
+        {
+          role: "assistant",
+          text:
+            "I'm checking your wallet across all supported networks. Give me a moment and ask again.",
+        },
+      ]);
+
+      setInput("");
+      setSelectedImage(null);
+
+      return;
+    }
+
+    if (
+      walletQuestion &&
+      isConnected &&
+      !walletBalance &&
+      !allWalletBalancesLoading
+    ) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "user",
+          text,
+        },
+        {
+          role: "assistant",
+          text:
+            "Your wallet is connected, but I couldn't read the wallet data yet. Please wait a moment and try again.",
+        },
+      ]);
+
+      setInput("");
+      setSelectedImage(null);
+
+      return;
+    }
 
     setMessages((current) => [
       ...current,
@@ -254,13 +551,18 @@ export default function ChatPage() {
         : parseAgentSwap(text);
 
       if (swap) {
-        if (!isConnected || !address) {
+        if (
+          !isConnected ||
+          !address ||
+          walletReconnecting
+        ) {
           setMessages((current) => [
             ...current,
             {
               role: "assistant",
-              text:
-                "Connect your wallet first, then I can prepare that swap for you.",
+              text: walletReconnecting
+                ? "Your wallet is reconnecting. Please wait a moment, then I can prepare that swap for you."
+                : "Connect your wallet first, then I can prepare that swap for you.",
             },
           ]);
 
@@ -286,8 +588,7 @@ export default function ChatPage() {
             {
               role: "assistant",
               text:
-                "Your wallet is connected, but it is currently on the wrong network. " +
-                "Switch to BNB Chain and try the swap again.",
+                "Your wallet is connected, but it is currently on the wrong network. Switch to BNB Chain and try the swap again.",
             },
           ]);
 
@@ -300,10 +601,25 @@ export default function ChatPage() {
         const balanceSymbol =
           walletBalance.symbol;
 
-        const requestedAmount = parseUnits(
-          swap.amount,
-          swap.sellDecimals
-        );
+        let requestedAmount: bigint;
+
+        try {
+          requestedAmount = parseUnits(
+            swap.amount,
+            swap.sellDecimals
+          );
+        } catch {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              text:
+                "I couldn't understand the swap amount. Please enter a valid amount.",
+            },
+          ]);
+
+          return;
+        }
 
         if (
           requestedAmount >
@@ -324,10 +640,8 @@ export default function ChatPage() {
           return;
         }
 
-        const sellAmount = parseUnits(
-          swap.amount,
-          swap.sellDecimals
-        ).toString();
+        const sellAmount =
+          requestedAmount.toString();
 
         const response = await fetch(
           "/api/agent/swap",
@@ -357,10 +671,17 @@ export default function ChatPage() {
 
         const quote = data.quote;
 
-        const buyAmount = quote.buyAmount
-          ? Number(quote.buyAmount) /
-            10 ** swap.buyDecimals
-          : 0;
+        if (!quote) {
+          throw new Error(
+            "Agora couldn't get a valid swap quote."
+          );
+        }
+
+        const buyAmount =
+          quote.buyAmount
+            ? Number(quote.buyAmount) /
+              10 ** swap.buyDecimals
+            : 0;
 
         if (
           quote.transaction?.to &&
@@ -375,6 +696,10 @@ export default function ChatPage() {
               quote.transaction.value || "0"
             ),
           });
+        } else {
+          throw new Error(
+            "The swap quote did not contain a valid wallet transaction."
+          );
         }
 
         const formattedBuyAmount =
@@ -413,14 +738,20 @@ export default function ChatPage() {
             message: text,
             history: messages,
             wallet:
-              isConnected && walletBalance
+              isConnected &&
+              address &&
+              !walletReconnecting
                 ? {
-                    address,
-                    chainId,
+                    connected: true,
+                    address: address || null,
+                    chainId: chainId || null,
                     balance:
-                      walletBalance.formatted,
+                      walletBalance?.formatted ||
+                      null,
                     symbol:
-                      walletBalance.symbol,
+                      walletBalance?.symbol ||
+                      null,
+                    balances: allWalletBalances,
                   }
                 : null,
             imageData:
@@ -444,7 +775,10 @@ export default function ChatPage() {
         ...current,
         {
           role: "assistant",
-          text: data.response,
+          text:
+            typeof data.response === "string"
+              ? data.response
+              : "Agora couldn't generate a response.",
         },
       ]);
     } catch (error) {
@@ -483,6 +817,24 @@ export default function ChatPage() {
           </div>
 
           <div className="header-actions">
+            {address && !walletReconnecting && (
+              <button
+                type="button"
+                className="wallet-button"
+                onClick={() => disconnect()}
+                title="Disconnect wallet"
+              >
+                {address.slice(0, 6)}…
+                {address.slice(-4)}
+              </button>
+            )}
+
+            {walletReconnecting && (
+              <div className="wallet-status">
+                Reconnecting…
+              </div>
+            )}
+
             <button
               className="theme-button"
               onClick={toggleTheme}
@@ -861,6 +1213,40 @@ export default function ChatPage() {
           color: var(--text);
           cursor: pointer;
           font-size: 18px;
+        }
+
+        .wallet-button {
+          min-height: 38px;
+          padding: 0 12px;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: var(--surface);
+          color: var(--text);
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition:
+            background 0.15s ease,
+            transform 0.15s ease;
+        }
+
+        .wallet-button:hover {
+          background: var(--yellow);
+          color: #050505;
+          transform: translateY(-1px);
+        }
+
+        .wallet-status {
+          min-height: 38px;
+          display: flex;
+          align-items: center;
+          padding: 0 10px;
+          border-radius: 12px;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          color: var(--muted);
+          font-size: 11px;
+          font-weight: 700;
         }
 
         .online {
@@ -1383,6 +1769,21 @@ export default function ChatPage() {
           .composer > button:last-child {
             width: 44px;
             height: 44px;
+          }
+
+          .wallet-button {
+            max-width: 105px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .online {
+            display: none;
+          }
+
+          .header-actions {
+            gap: 7px;
           }
         }
       `}</style>

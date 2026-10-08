@@ -61,6 +61,15 @@ const SUPPORTED_CHAINS = [
   },
 ] as const;
 
+const PUBLIC_RPCS: Record<number, string> = {
+  1: "https://ethereum.publicnode.com",
+  8453: "https://base.publicnode.com",
+  137: "https://polygon-bor-rpc.publicnode.com",
+  42161: "https://arbitrum-one.publicnode.com",
+  10: "https://optimism.publicnode.com",
+  56: "https://bsc-dataseed.binance.org",
+};
+
 function chainName(chainId: number) {
   return (
     SUPPORTED_CHAINS.find(
@@ -131,6 +140,33 @@ async function robinhoodRpc(
   params: any[] = []
 ) {
   return getJson(ROBINHOOD_RPC, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params,
+    }),
+  });
+}
+
+async function publicRpc(
+  chainId: number,
+  method: string,
+  params: any[] = []
+) {
+  const rpc = PUBLIC_RPCS[chainId];
+
+  if (!rpc) {
+    throw new Error(
+      `No public RPC configured for chain ${chainId}`
+    );
+  }
+
+  return getJson(rpc, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -244,9 +280,7 @@ async function readRobinhoodTokenMetadata(
           data.type ?? "ERC-20",
       };
     }
-  } catch {
-    // Fall through to RPC.
-  }
+  } catch {}
 
   try {
     const [
@@ -338,35 +372,24 @@ async function readRobinhoodContract(
   }
 }
 
-function getBestPair(
-  pairs: any
-) {
+function getBestPair(pairs: any) {
   const pairList = Array.isArray(pairs)
     ? pairs
     : [];
 
-  return [...pairList].sort(
-    (a: any, b: any) =>
-      Number(
-        b?.liquidity?.usd ?? 0
-      ) -
-      Number(
-        a?.liquidity?.usd ?? 0
-      )
-  )[0] ?? null;
+  return (
+    [...pairList].sort(
+      (a: any, b: any) =>
+        Number(
+          b?.liquidity?.usd ?? 0
+        ) -
+        Number(
+          a?.liquidity?.usd ?? 0
+        )
+    )[0] ?? null
+  );
 }
 
-/**
- * This is a transparent signal score.
- *
- * It is NOT a security audit and does not mean
- * a contract is safe.
- *
- * Higher = more positive observable signals.
- * Lower = more negative observable signals.
- *
- * We only score when enough real signals exist.
- */
 function calculateSignalScore({
   verified,
   hasSource,
@@ -460,13 +483,6 @@ async function tokenScan(
     );
   }
 
-  /*
-   * Robinhood Chain
-   *
-   * Routescan does not currently index
-   * Robinhood Chain, so use Blockscout,
-   * DexScreener and the public RPC.
-   */
   if (chainId === 4663) {
     const [
       token,
@@ -518,8 +534,8 @@ async function tokenScan(
               bestPair.volume?.h24 ??
               null,
             priceChange24h:
-              bestPair.priceChange
-                ?.h24 ?? null,
+              bestPair.priceChange?.h24 ??
+              null,
             dex:
               bestPair.dexId ??
               null,
@@ -616,8 +632,8 @@ async function tokenScan(
             bestPair.volume?.h24 ??
             null,
           priceChange24h:
-            bestPair.priceChange
-              ?.h24 ?? null,
+            bestPair.priceChange?.h24 ??
+            null,
           dex:
             bestPair.dexId ??
             null,
@@ -629,24 +645,183 @@ async function tokenScan(
   };
 }
 
+function formatNativeBalance(
+  rawBalance: unknown
+) {
+  try {
+    const value = BigInt(
+      String(rawBalance ?? "0")
+    );
+
+    const decimals =
+      BigInt(10) ** BigInt(18);
+
+    const whole =
+      value / decimals;
+
+    const fraction =
+      value % decimals;
+
+    const fractionText =
+      fraction
+        .toString()
+        .padStart(18, "0")
+        .replace(/0+$/, "");
+
+    if (!fractionText) {
+      return whole.toString();
+    }
+
+    return `${whole}.${fractionText}`;
+  } catch {
+    return "0";
+  }
+}
+
+async function getChainNativeBalance(
+  chain: (typeof SUPPORTED_CHAINS)[number],
+  address: string
+) {
+  if (chain.id === 4663) {
+    try {
+      const data =
+        await robinhoodRpc(
+          "eth_getBalance",
+          [
+            address,
+            "latest",
+          ]
+        );
+
+      const rawBalance =
+        data?.result ?? "0x0";
+
+      const balanceWei =
+        BigInt(rawBalance);
+
+      return {
+        chainId: chain.id,
+        network: chain.name,
+        symbol: chain.symbol,
+        balance:
+          balanceWei.toString(),
+        formatted:
+          formatNativeBalance(
+            balanceWei.toString()
+          ),
+        unavailable: false,
+      };
+    } catch (error) {
+      console.error(
+        `Robinhood balance lookup failed:`,
+        error
+      );
+
+      return {
+        chainId: chain.id,
+        network: chain.name,
+        symbol: chain.symbol,
+        balance: "0",
+        formatted: "0",
+        unavailable: true,
+      };
+    }
+  }
+
+  const rpc =
+    PUBLIC_RPCS[chain.id];
+
+  if (!rpc) {
+    return {
+      chainId: chain.id,
+      network: chain.name,
+      symbol: chain.symbol,
+      balance: "0",
+      formatted: "0",
+      unavailable: true,
+    };
+  }
+
+  try {
+    const data =
+      await publicRpc(
+        chain.id,
+        "eth_getBalance",
+        [
+          address,
+          "latest",
+        ]
+      );
+
+    if (data?.error) {
+      throw new Error(
+        data.error.message ??
+          "RPC balance request failed"
+      );
+    }
+
+    const rawBalance =
+      data?.result ?? "0x0";
+
+    const balanceWei =
+      BigInt(rawBalance);
+
+    return {
+      chainId: chain.id,
+      network: chain.name,
+      symbol: chain.symbol,
+      balance:
+        balanceWei.toString(),
+      formatted:
+        formatNativeBalance(
+          balanceWei.toString()
+        ),
+      unavailable: false,
+    };
+  } catch (error) {
+    console.error(
+      `Balance lookup failed for ${chain.name}:`,
+      error
+    );
+
+    return {
+      chainId: chain.id,
+      network: chain.name,
+      symbol: chain.symbol,
+      balance: "0",
+      formatted: "0",
+      unavailable: true,
+    };
+  }
+}
+
 async function addressExplorer(
   address: string
 ) {
+  const balanceChains =
+    SUPPORTED_CHAINS.filter(
+      (chain) =>
+        chain.id !== 4663
+    );
+
+  const balances =
+    await Promise.all(
+      balanceChains.map(
+        (chain) =>
+          getChainNativeBalance(
+            chain,
+            address
+          )
+      )
+    );
+
   const [
     holdings,
-    gasBalances,
     transactions,
   ] = await Promise.all([
     routescan(
       "all",
       `/address/${address}/erc20-holdings`,
-      {
-        limit: "100",
-      }
-    ),
-    routescan(
-      "all",
-      `/address/${address}/gas-balance`,
       {
         limit: "100",
       }
@@ -676,20 +851,6 @@ async function addressExplorer(
         )
       : [];
 
-  const realGasBalances =
-    Array.isArray(
-      gasBalances?.items
-    )
-      ? gasBalances.items.filter(
-          (item: any) =>
-            supportedChain(
-              Number(
-                item.chainId
-              )
-            )
-        )
-      : [];
-
   const realTransactions =
     Array.isArray(
       transactions?.items
@@ -709,6 +870,7 @@ async function addressExplorer(
   return {
     type: "address",
     address,
+    balances,
     holdings:
       realHoldings.map(
         (item: any) => ({
@@ -721,18 +883,7 @@ async function addressExplorer(
             ),
         })
       ),
-    gasBalances:
-      realGasBalances.map(
-        (item: any) => ({
-          ...item,
-          network:
-            chainName(
-              Number(
-                item.chainId
-              )
-            ),
-        })
-      ),
+    gasBalances: balances,
     transactions:
       realTransactions.map(
         (item: any) => ({
@@ -763,17 +914,6 @@ async function riskScan(
     );
   }
 
-  /*
-   * Robinhood Chain
-   *
-   * Uses:
-   * - Blockscout token metadata
-   * - Blockscout contract information
-   * - DexScreener liquidity
-   *
-   * We do NOT pretend this is a complete
-   * smart-contract security audit.
-   */
   if (chainId === 4663) {
     const [
       token,
@@ -810,8 +950,10 @@ async function riskScan(
       );
 
     const verified =
-      contractInfo?.is_verified === true ||
-      contractInfo?.is_fully_verified === true;
+      contractInfo?.is_verified ===
+        true ||
+      contractInfo?.is_fully_verified ===
+        true;
 
     const hasSource =
       Boolean(
@@ -833,8 +975,7 @@ async function riskScan(
         hasMetadata,
       });
 
-    const warnings: string[] =
-      [];
+    const warnings: string[] = [];
 
     if (
       contractInfo &&
@@ -1007,8 +1148,7 @@ async function riskScan(
       hasMetadata,
     });
 
-  const warnings: string[] =
-    [];
+  const warnings: string[] = [];
 
   if (!verified) {
     warnings.push(
@@ -1062,101 +1202,71 @@ async function riskScan(
   };
 }
 
+/* =========================================================
+   GAS TRACKER
+   Uses direct eth_gasPrice RPC calls.
+   Does NOT use Routescan gasoracle.
+   ========================================================= */
+
 async function gasTracker() {
   const results =
     await Promise.all(
       SUPPORTED_CHAINS.map(
         async (chain) => {
           try {
-            if (
+            const data =
               chain.id === 4663
-            ) {
-              const data =
-                await robinhoodRpc(
-                  "eth_gasPrice"
-                );
+                ? await robinhoodRpc(
+                    "eth_gasPrice"
+                  )
+                : await publicRpc(
+                    chain.id,
+                    "eth_gasPrice"
+                  );
 
-              const hex =
-                data?.result;
-
-              const wei =
-                hex
-                  ? BigInt(hex)
-                  : BigInt(0);
-
-              const gwei =
-                Number(wei) /
-                1e9;
-
-              return {
-                chainId:
-                  chain.id,
-                network:
-                  chain.name,
-                symbol:
-                  chain.symbol,
-                gasPriceGwei:
-                  gwei,
-                status:
-                  gwei > 0
-                    ? "live"
-                    : "unavailable",
-              };
+            if (data?.error) {
+              throw new Error(
+                data.error.message ??
+                  "Gas RPC failed"
+              );
             }
 
-            const data =
-              await routescan(
-                chain.routescan,
-                "/etherscan/api",
-                {
-                  module:
-                    "gastracker",
-                  action:
-                    "gasoracle",
-                }
-              );
+            const raw =
+              data?.result ?? "0x0";
 
-            const result =
-              data?.result ??
-              {};
+            const wei =
+              BigInt(raw);
 
-            const gas =
-              Number(
-                result?.ProposeGasPrice ??
-                  result?.proposeGasPrice ??
-                  0
-              );
+            const gwei =
+              Number(wei) / 1e9;
 
             return {
-              chainId:
-                chain.id,
-              network:
-                chain.name,
-              symbol:
-                chain.symbol,
+              chainId: chain.id,
+              network: chain.name,
+              symbol: chain.symbol,
               gasPriceGwei:
-                Number.isFinite(
-                  gas
-                ) &&
-                gas > 0
-                  ? gas
+                Number.isFinite(gwei)
+                  ? Number(
+                      gwei.toFixed(6)
+                    )
                   : null,
               status:
-                gas > 0
+                gwei > 0
                   ? "live"
                   : "unavailable",
             };
-          } catch {
+          } catch (error) {
+            console.error(
+              `Gas lookup failed for ${chain.name}:`,
+              error
+            );
+
             return {
-              chainId:
-                chain.id,
-              network:
-                chain.name,
-              symbol:
-                chain.symbol,
-              error: true,
-              status:
-                "unavailable",
+              chainId: chain.id,
+              network: chain.name,
+              symbol: chain.symbol,
+              gasPriceGwei: null,
+              status: "unavailable",
             };
           }
         }
@@ -1183,8 +1293,7 @@ async function decodeTransaction(
 
   return {
     type: "transaction",
-    transaction:
-      data,
+    transaction: data,
   };
 }
 
@@ -1242,19 +1351,11 @@ async function portfolioAnalytics(
 ) {
   const [
     holdings,
-    gasBalances,
     transfers,
   ] = await Promise.all([
     routescan(
       "all",
       `/address/${address}/erc20-holdings`,
-      {
-        limit: "100",
-      }
-    ),
-    routescan(
-      "all",
-      `/address/${address}/gas-balance`,
       {
         limit: "100",
       }
@@ -1272,25 +1373,27 @@ async function portfolioAnalytics(
     ),
   ]);
 
+  const nativeBalances =
+    await Promise.all(
+      SUPPORTED_CHAINS
+        .filter(
+          (chain) =>
+            chain.id !== 4663
+        )
+        .map(
+          (chain) =>
+            getChainNativeBalance(
+              chain,
+              address
+            )
+        )
+    );
+
   const filteredHoldings =
     Array.isArray(
       holdings?.items
     )
       ? holdings.items.filter(
-          (item: any) =>
-            supportedChain(
-              Number(
-                item.chainId
-              )
-            )
-        )
-      : [];
-
-  const filteredGas =
-    Array.isArray(
-      gasBalances?.items
-    )
-      ? gasBalances.items.filter(
           (item: any) =>
             supportedChain(
               Number(
@@ -1331,11 +1434,20 @@ async function portfolioAnalytics(
   const totalTransfers =
     filteredTransfers.length;
 
+  const activeNativeNetworks =
+    nativeBalances.filter(
+      (item) =>
+        !item.unavailable &&
+        Number(
+          item.formatted
+        ) > 0
+    );
+
   const networkCount =
     new Set(
       [
         ...filteredHoldings,
-        ...filteredGas,
+        ...activeNativeNetworks,
       ].map(
         (item: any) =>
           Number(
@@ -1350,6 +1462,7 @@ async function portfolioAnalytics(
     tokenValue,
     totalTransfers,
     networkCount,
+
     holdings:
       filteredHoldings.map(
         (item: any) => ({
@@ -1362,18 +1475,10 @@ async function portfolioAnalytics(
             ),
         })
       ),
+
     gasBalances:
-      filteredGas.map(
-        (item: any) => ({
-          ...item,
-          network:
-            chainName(
-              Number(
-                item.chainId
-              )
-            ),
-        })
-      ),
+      nativeBalances,
+
     transfers:
       filteredTransfers.map(
         (item: any) => ({
