@@ -142,6 +142,11 @@ export default function ConnectPage() {
       setError("");
       setAuthLoading(true);
 
+      await setPersistence(
+        firebaseAuth,
+        browserLocalPersistence,
+      );
+
       if (isRegistering) {
         await createUserWithEmailAndPassword(
           firebaseAuth,
@@ -229,11 +234,9 @@ export default function ConnectPage() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#050505] text-white">
-      {/* Background glow */}
       <div className="pointer-events-none absolute left-1/2 top-[-220px] h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-[#f5c400]/10 blur-[120px]" />
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-6 sm:px-8 lg:px-12">
-        {/* Header */}
         <header className="flex items-center justify-between">
           <Link
             href="/"
@@ -259,10 +262,8 @@ export default function ConnectPage() {
           </div>
         </header>
 
-        {/* Main */}
         <section className="flex flex-1 items-center justify-center py-14">
           <div className="grid w-full max-w-5xl items-center gap-10 lg:grid-cols-[1fr_440px] lg:gap-20">
-            {/* Left side */}
             <div className="hidden lg:block">
               <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#f5c400]/20 bg-[#f5c400]/[0.06] px-4 py-2 text-xs font-semibold text-[#f5c400]">
                 <span className="h-2 w-2 rounded-full bg-[#f5c400] shadow-[0_0_12px_#f5c400]" />
@@ -300,7 +301,6 @@ export default function ConnectPage() {
               </div>
             </div>
 
-            {/* Connect card */}
             <div className="w-full">
               <div className="mb-5 lg:hidden">
                 <div className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-[#f5c400]">
@@ -335,7 +335,6 @@ export default function ConnectPage() {
                 )}
 
                 <div className="space-y-3">
-                  {/* Google */}
                   <button
                     type="button"
                     onClick={handleGoogle}
@@ -353,7 +352,6 @@ export default function ConnectPage() {
                     </span>
                   </button>
 
-                  {/* Email */}
                   {!showEmail ? (
                     <button
                       type="button"
@@ -433,7 +431,6 @@ export default function ConnectPage() {
                     </form>
                   )}
 
-                  {/* Divider */}
                   <div className="flex items-center gap-3 py-3">
                     <div className="h-px flex-1 bg-white/10" />
 
@@ -444,7 +441,6 @@ export default function ConnectPage() {
                     <div className="h-px flex-1 bg-white/10" />
                   </div>
 
-                  {/* Wallet */}
                   <div className="flex justify-center">
                     <div className="w-full">
                       <ConnectButton.Custom>
@@ -527,7 +523,6 @@ export default function ConnectPage() {
           </div>
         </section>
 
-        {/* Footer */}
         <footer className="flex items-center justify-center pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/20">
           AGORA · AI × WEB3
         </footer>
